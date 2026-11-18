@@ -181,7 +181,8 @@ from a legacy JSON backup can be processed with `load_liked_albums`.
 The default search (`--algo 2`) searches the public catalogue directly; it does not
 require a song to appear on an artist's main page:
 
-1. Search up to 50 song results using title and artist, with spelling correction disabled.
+1. Start with the first page of song results using title and artist, with spelling
+   correction disabled. A deeper search is reserved for unresolved tracks.
 2. Inspect tracks from up to five album results, validating the artist as well as the title.
 3. Try reordered, quoted, and album-qualified queries in songs, videos, and global search.
    If those fallbacks do not find a suitable match, search by the exported recording

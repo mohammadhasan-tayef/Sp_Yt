@@ -48,6 +48,14 @@ def test_best_candidate_wins_over_first_hit():
     correct = song(videoId="correct0001")
     yt.search.return_value = [song(artist="Wrong Artist"), correct]
     assert lookup_song(yt, "Survival", "Yes", "Yes", 2) == correct
+    yt.search.assert_called_once_with(query="Survival Yes", filter="songs", limit=20, ignore_spelling=True)
+
+
+def test_deeper_search_is_used_when_targeted_searches_miss():
+    yt = Mock()
+    correct = song()
+    yt.search.side_effect = lambda **kw: [correct] if kw["limit"] == 50 else []
+    assert lookup_song(yt, "Survival", "Yes", "Yes", 2) == correct
 
 
 def test_album_track_must_match_artist():

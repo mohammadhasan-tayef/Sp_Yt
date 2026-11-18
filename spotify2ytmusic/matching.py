@@ -250,11 +250,11 @@ def lookup_song(
                         candidate[key] = song[key]
         details.songs = list(candidates.values())
 
-    def search(query, filter, *, ignore_spelling=True):
+    def search(query, filter, *, limit=20, ignore_spelling=True):
         details.queries.append({"query": query, "filter": filter})
         # Let transport/auth failures reach the copier's bounded retry loop.
         return yt.search(
-            query=query, filter=filter, limit=50, ignore_spelling=ignore_spelling
+            query=query, filter=filter, limit=limit, ignore_spelling=ignore_spelling
         )
 
     def select():
@@ -287,7 +287,7 @@ def lookup_song(
     if album_name:
         album_query = f"{album_name} {artist_name}"
         if album_query not in cache:
-            cache[album_query] = search(album_query, "albums")[:5]
+            cache[album_query] = search(album_query, "albums", limit=5)[:5]
         for album in cache[album_query]:
             browse_id = album.get("browseId")
             if not browse_id:
@@ -346,6 +346,11 @@ def lookup_song(
         if isrc:
             collect(search(isrc, "songs"))
         collect(search(details.query, "songs", ignore_spelling=False))
+        selected = select()
+        if selected:
+            return selected
+        # Spend extra page requests only when the targeted searches did not find a match.
+        collect(search(details.query, "songs", limit=50))
         selected = select()
         if selected:
             return selected
