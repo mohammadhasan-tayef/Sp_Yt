@@ -507,6 +507,32 @@ def test_authentication_failure_stops_remaining_tracks(yt, track, match, tmp_pat
     yt.add_playlist_items.assert_called_once()
 
 
+@pytest.mark.parametrize("catalog_reachable", [True, False])
+def test_public_catalog_only_defers_a_denied_query_when_catalog_is_reachable(
+    yt, track, match, tmp_path, monkeypatch, catalog_reachable
+):
+    response = Response()
+    response.status_code = 403
+    error = HTTPError(response=response)
+    match.side_effect = [error, error, match.return_value]
+    monkeypatch.setattr(backend.time, "sleep", Mock())
+    public = Mock()
+    if not catalog_reachable:
+        public.search.side_effect = error
+    report = tmp_path / "report.jsonl"
+    result = backend.copier(
+        iter([track, track]), "destination", yt=yt, catalog=public,
+        dry_run=True, track_sleep=0, report_file=report,
+    )
+    assert result["failed"] == 1
+    assert result["total"] == (2 if catalog_reachable else 1)
+    assert result["planned"] == int(catalog_reachable)
+    assert (result["verification_error"] is None) == catalog_reachable
+    if catalog_reachable:
+        assert "track needs review" in rows(report)[0]["error"]
+    yt.add_playlist_items.assert_not_called()
+
+
 def test_liked_song_response_is_verified(yt, track, match, tmp_path):
     yt.get_liked_songs.side_effect = [
         {"tracks": []},

@@ -441,6 +441,7 @@ def copier(
             }
             details = ResearchDetails()
             used_api = False
+            searching_catalog = False
             print(
                 f"Spotify: {src_track.title} - {src_track.artist} - {src_track.album}"
             )
@@ -492,6 +493,7 @@ def copier(
                         dst_track = cached
                 if dst_track is None:
                     used_api = True
+                    searching_catalog = True
                     dst_track = _retry(
                         lambda: lookup_song(
                             catalog,
@@ -509,6 +511,7 @@ def copier(
                         ),
                         read_only=True,
                     )
+                    searching_catalog = False
                     match_cache[cache_key] = dst_track
                 row["queries"] = details.queries
                 video_id = dst_track["videoId"]
@@ -596,6 +599,17 @@ def copier(
                     expected.setdefault(video_id, []).append(source_key)
                 summary[row["status"]] += 1
             except Exception as error:
+                status = _http_status(error)
+                if searching_catalog and catalog is not yt and status == 403:
+                    try:
+                        # A single public query can fail while catalog search is available.
+                        catalog.search("music", filter="songs", limit=1)
+                    except Exception:
+                        pass  # Preserve the original access failure and stop.
+                    else:
+                        details.errors.append("Track query returned HTTP 403 while public search was reachable")
+                        error = ValueError("Catalog search was denied for this track; track needs review")
+                        status = None
                 row.update(
                     status="failed",
                     error=str(error),
@@ -620,7 +634,7 @@ def copier(
                 )
                 summary["failed"] += 1
                 print(f"ERROR: {error}")
-                if _http_status(error) in (401, 403):
+                if status in (401, 403):
                     summary["verification_error"] = (
                         f"Transfer stopped after authentication/access failure: {error}"
                     )
