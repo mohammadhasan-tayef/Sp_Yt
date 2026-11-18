@@ -201,6 +201,17 @@ def test_forbidden_song_search_is_still_reported_as_an_access_error():
     yt.get_album.assert_not_called()
 
 
+def test_denied_supplementary_query_defers_only_the_current_track():
+    yt = Mock()
+    response = Response()
+    response.status_code = 403
+    yt.search.side_effect = [[song(artist="Unrelated")], HTTPError("Forbidden", response=response)]
+    with pytest.raises(MatchNotFound, match="Supplementary catalog search was denied") as caught:
+        lookup_song(yt, "Survival", "Yes", "Yes")
+    assert caught.value.details.songs[0]["artists"] == [{"name": "Unrelated"}]
+    assert caught.value.details.errors == ["Supplementary catalog search returned HTTP 403"]
+
+
 def test_review_mode_withholds_tied_distinct_recordings():
     yt = Mock()
     candidates = [song(), song(videoId="another0001")]

@@ -84,6 +84,14 @@ class MatchNotFound(ValueError):
         self.details = details
 
 
+def _catalog_error_status(error):
+    status = getattr(getattr(error, "response", None), "status_code", None)
+    if status is not None:
+        return status
+    match = re.search(r"\bHTTP (\d{3})\b", str(error))
+    return int(match[1]) if match else None
+
+
 def candidate_score(
     song, title, artist, album, duration_ms=None, explicit=None, strict_album=False
 ):
@@ -251,12 +259,17 @@ def lookup_song(
                         candidate[key] = song[key]
         details.songs = list(candidates.values())
 
-    def search(query, filter, *, limit=20, ignore_spelling=True):
+    def search(query, filter, *, limit=20, ignore_spelling=True, required=False):
         details.queries.append({"query": query, "filter": filter})
-        # Let transport/auth failures reach the copier's bounded retry loop.
-        return yt.search(
-            query=query, filter=filter, limit=limit, ignore_spelling=ignore_spelling
-        )
+        try:
+            return yt.search(
+                query=query, filter=filter, limit=limit, ignore_spelling=ignore_spelling
+            )
+        except (HTTPError, YTMusicServerError) as error:
+            if required or _catalog_error_status(error) != 403:
+                raise
+            details.errors.append("Supplementary catalog search returned HTTP 403")
+            raise MatchNotFound("Supplementary catalog search was denied; track needs review", details) from None
 
     def select():
         ranked = rank_songs(
@@ -276,7 +289,7 @@ def lookup_song(
             return None
         return ranked[0][1]
 
-    collect(search(details.query, "songs"))
+    collect(search(details.query, "songs", required=True))
     selected = select()
     # Album lookup can distinguish same-title recordings and release variants.
     if selected and (
@@ -297,11 +310,7 @@ def lookup_song(
                 try:
                     cache[browse_id] = yt.get_album(browse_id)
                 except (HTTPError, YTMusicServerError) as error:
-                    status = getattr(getattr(error, "response", None), "status_code", None)
-                    if status is None:
-                        match = re.search(r"\bHTTP (\d{3})\b", str(error))
-                        status = int(match[1]) if match else None
-                    if status not in (403, 404):
+                    if _catalog_error_status(error) not in (403, 404):
                         raise
                     # Album browse is supplementary. An individual release may
                     # be inaccessible even while normal catalog search works.
