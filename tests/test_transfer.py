@@ -110,6 +110,37 @@ def test_missing_duplicate_is_not_counted_as_verified(yt, track, match, tmp_path
     assert result["sequence_matches"] is False
 
 
+def test_no_duplicates_reuses_one_entry_for_repeated_source_recording(yt, track, match, tmp_path):
+    track = track._replace(isrc="USABC1234567")
+    alternate_release = track._replace(album="Another Album", spotify_id="another-source")
+    yt.get_playlist.side_effect = [
+        {"title": "Destination", "tracks": []},
+        {"title": "Destination", "tracks": [{"videoId": "testvideo01"}]},
+    ]
+    result = backend.copier(iter([track, alternate_release]), "destination", yt=yt,
+                            no_duplicates=True, track_sleep=0, report_file=tmp_path / "report.jsonl")
+    assert (result["added"], result["already_present"], result["verified"]) == (1, 1, 2)
+    assert result["sequence_matches"] is True
+    match.assert_called_once()
+    yt.add_playlist_items.assert_called_once_with(playlistId="destination", videoIds=["testvideo01"], duplicates=False)
+
+
+@pytest.mark.parametrize("destination", [None, "destination"])
+def test_no_duplicates_defers_when_an_alternate_version_is_already_listed(yt, track, match, tmp_path, destination):
+    existing = {"title": "Destination", "tracks": [{
+        **match.return_value, "videoId": "different01", "album": {"name": "Compilation"},
+    }]}
+    yt.get_playlist.return_value = existing
+    yt.get_liked_songs.return_value = existing
+    report = tmp_path / "report.jsonl"
+    result = backend.copier(iter([track]), destination, yt=yt, audit_existing=True,
+                            no_duplicates=True, track_sleep=0, report_file=report)
+    assert result["failed"] == 1
+    assert "avoid a duplicate" in rows(report)[0]["error"]
+    yt.add_playlist_items.assert_not_called()
+    yt.rate_song.assert_not_called()
+
+
 def test_lost_duplicate_add_response_is_reconciled_before_retry(
     yt, track, match, tmp_path, monkeypatch
 ):

@@ -105,6 +105,9 @@ could not be matched to this export. Review those entries before removing anythi
 After reviewing the preview, rerun the same command without `--dry-run` to add the
 missing matches. If a destination was renamed or its name is ambiguous, use its
 exact playlist ID with `copy_playlist SOURCE_ID DESTINATION_ID --existing-only`.
+Add `--no-duplicates` to keep one copy of each recording even if the Spotify source
+repeats it. When a similar recording is already listed, the tool flags it for review
+before adding another version.
 
 When you deliberately want a new playlist, preview `copy_playlist SOURCE_ID
 "+New Playlist Name" --review-weak --dry-run` first. The `+` form creates the

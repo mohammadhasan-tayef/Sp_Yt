@@ -338,6 +338,7 @@ def copier(
     audit_existing=False,
     playlist_mode=False,
     catalog=None,
+    no_duplicates=False,
 ):
     """Copy, checkpoint every source row, and verify destination membership.
 
@@ -349,6 +350,7 @@ def copier(
     yt = yt if yt is not None else get_ytmusic()
     catalog = catalog if catalog is not None else yt
     playlist_mode = playlist_mode or dst_pl_id is not None
+    preserve_occurrences = playlist_mode and not no_duplicates
     match_cache = (
         match_cache if match_cache is not None else _load_match_cache(report_file)
     )
@@ -393,10 +395,11 @@ def copier(
         if t.get("videoId") in existing and t.get("isAvailable") is not False
     )
     source_counts = Counter()
+    matched_recordings = {}
     source_sequence = []
     covered_existing = set()
     destination_index = {}
-    if audit_existing:
+    if audit_existing or no_duplicates:
         for item in destination_tracks:
             if not item.get("videoId"):
                 continue
@@ -425,6 +428,7 @@ def copier(
             source_key = src_track.spotify_id or json.dumps(
                 [src_track.title, src_track.artist, src_track.album], ensure_ascii=False
             )
+            recording_key = src_track.isrc or source_key
             cache_key = json.dumps(
                 [MATCH_POLICY, yt_search_algo, review_weak, src_track._asdict()],
                 sort_keys=True,
@@ -445,9 +449,11 @@ def copier(
                     raise ValueError(
                         "Source track is unavailable or lacks title/artist metadata"
                     )
-                dst_track = None
-                if audit_existing and source_key not in overrides:
-                    candidates = destination_index.get(title_key(src_track.title), {})
+                dst_track = matched_recordings.get(recording_key)
+                if dst_track is not None:
+                    row["resolution"] = "repeated_source_recording"
+                candidates = destination_index.get(title_key(src_track.title), {})
+                if dst_track is None and audit_existing and source_key not in overrides:
                     # Even an unavailable entry can establish that the recording is listed.
                     ranked = rank_songs(
                         ({**item, "isAvailable": True} for item in candidates.values()),
@@ -468,7 +474,7 @@ def copier(
                     if ranked:
                         dst_track = candidates[ranked[0][1]["videoId"]]
                         row["resolution"] = "existing_track_metadata"
-                if source_key in overrides:
+                if dst_track is None and source_key in overrides:
                     video_id = overrides[source_key]
                     used_api = True
                     song = _retry(lambda: yt.get_song(video_id), read_only=True)
@@ -511,11 +517,12 @@ def copier(
                     row["cache_key"] = cache_key
                 print(f"  Youtube: {dst_track.get('title')} ({video_id})")
                 source_counts[video_id] += 1
-                source_sequence.append(video_id)
                 occurrence = source_counts[video_id]
+                if preserve_occurrences or occurrence == 1:
+                    source_sequence.append(video_id)
                 already_present = (
                     existing_counts[video_id] >= occurrence
-                    if playlist_mode
+                    if preserve_occurrences
                     else video_id in existing or video_id in seen
                 )
                 if already_present:
@@ -524,6 +531,12 @@ def copier(
                         covered_existing.add(video_id)
                 elif listed_counts[video_id] > existing_counts[video_id]:
                     raise ValueError("Recording is already listed but unavailable in this YouTube Music session")
+                elif no_duplicates and candidates and rank_songs(
+                    ({**item, "isAvailable": True} for item in candidates.values()),
+                    src_track.title, src_track.artist, "", src_track.duration_ms,
+                    src_track.explicit, src_track.artists, review_weak=True,
+                ):
+                    raise ValueError("A similar recording is already listed; addition deferred to avoid a duplicate")
                 elif dry_run:
                     row["status"] = "planned"
                 else:
@@ -542,7 +555,7 @@ def copier(
                                 t.get("videoId") == video_id
                                 for t in current["tracks"]
                             )
-                            if count >= occurrence:
+                            if count >= (occurrence if preserve_occurrences else 1):
                                 return
                         attempted = True
                         if dst_pl_id is None:
@@ -551,7 +564,7 @@ def copier(
                             response = yt.add_playlist_items(
                                 playlistId=dst_pl_id,
                                 videoIds=[video_id],
-                                duplicates=occurrence > 1,
+                                duplicates=preserve_occurrences and occurrence > 1,
                             )
                         status = (
                             response.get("status")
@@ -571,10 +584,14 @@ def copier(
 
                     _retry(add)
                     row["status"] = "added"
+                    if no_duplicates:
+                        destination_index.setdefault(title_key(src_track.title), {})[video_id] = dst_track
                     existing_counts[video_id] = max(
                         existing_counts[video_id], occurrence
                     )
                 seen.add(video_id)
+                if no_duplicates:
+                    matched_recordings[recording_key] = dst_track
                 if not dry_run:
                     expected.setdefault(video_id, []).append(source_key)
                 summary[row["status"]] += 1
@@ -639,8 +656,8 @@ def copier(
                     for t in destination["tracks"]
                     if t.get("videoId") and t.get("isAvailable") is not False
                 )
-                if dst_pl_id is None:
-                    # Built-in likes are a set; regular playlists retain repetitions.
+                if not preserve_occurrences:
+                    # One destination entry can satisfy several source rows when deduplicating.
                     present = Counter({vid: len(expected.get(vid, [])) for vid in present})
                 missing = Counter({vid: len(keys) for vid, keys in expected.items()}) - present
                 summary["verified"] = sum(
@@ -648,7 +665,7 @@ def copier(
                 )
                 if dst_pl_id is not None:
                     summary["sequence_matches"] = (
-                        len(source_sequence) == summary["total"]
+                        sum(source_counts.values()) == summary["total"]
                         and [t.get("videoId") for t in destination["tracks"]] == source_sequence
                         and all(t.get("isAvailable") is not False for t in destination["tracks"])
                     )
@@ -705,6 +722,7 @@ def copy_playlist(
     review_weak=True,
     existing_only=False,
     catalog=None,
+    no_duplicates=False,
 ):
     """Copy one playlist; dry runs never create a destination playlist."""
     # Resolve and validate the source before making any destination changes.
@@ -758,6 +776,7 @@ def copy_playlist(
         audit_existing=existing_only,
         playlist_mode=True,
         catalog=catalog,
+        no_duplicates=no_duplicates,
     )
 
 
@@ -776,6 +795,7 @@ def copy_all_playlists(
     review_weak=True,
     existing_only=False,
     catalog=None,
+    no_duplicates=False,
 ):
     """Copy playlists with shared search caches and per-playlist reconciliation."""
     spotify_pls = load_playlists_json(spotify_playlist_file, spotify_playlists_encoding)
@@ -810,6 +830,7 @@ def copy_all_playlists(
                 review_weak=review_weak,
                 existing_only=existing_only,
                 catalog=catalog,
+                no_duplicates=no_duplicates,
             )
             if _http_status(results[src_pl["id"]].get("verification_error", "")) in (
                 401,

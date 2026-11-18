@@ -170,6 +170,10 @@ def _transfer_parser():
         help="Search the public catalog without sending account credentials",
     )
     parser.add_argument(
+        "--no-duplicates", action="store_true",
+        help="Keep one copy of each recording and flag possible existing versions",
+    )
+    parser.add_argument(
         "--review-weak",
         action="store_true",
         default=True,
@@ -199,6 +203,7 @@ def _copy_options(args):
         privacy_status=args.privacy,
         review_weak=args.review_weak,
         catalog=backend.get_public_catalog() if args.public_catalog else None,
+        no_duplicates=args.no_duplicates,
     )
 
 
@@ -217,6 +222,7 @@ def load_liked_albums():
             overrides=backend.load_overrides(args.overrides),
             source_playlist_id="liked-albums",
             review_weak=args.review_weak,
+            no_duplicates=args.no_duplicates,
             catalog=backend.get_public_catalog() if args.public_catalog else None,
         )
     )
@@ -241,6 +247,7 @@ def load_liked():
             source_playlist_id="liked-songs",
             review_weak=args.review_weak,
             audit_existing=True,
+            no_duplicates=args.no_duplicates,
             catalog=backend.get_public_catalog() if args.public_catalog else None,
         )
     )
