@@ -268,3 +268,49 @@ def test_default_matching_withholds_ties():
     )
     with pytest.raises(MatchNotFound):
         lookup_song(yt, "Survival", "Yes", "Yes", duration_ms=378000)
+
+
+@pytest.mark.parametrize("source_title, target_title", [
+    ("Survival", "Survival (feat. Guest)"),
+    ("Survival - feat. Guest", "Survival (feat. Guest)"),
+    ("Survival (with Guest)", "Survival"),
+])
+def test_guest_in_title_counts_as_an_exact_credit(source_title, target_title):
+    yt = Mock()
+    artists = [{"name": "Yes"}]
+    if target_title == "Survival":
+        artists.append({"name": "Guest"})
+    exact = song(title=target_title, artists=artists)
+    yt.search.side_effect = lambda **kw: [exact] if kw["filter"] == "songs" else []
+    assert lookup_song(
+        yt, source_title, "Yes", "Yes", duration_ms=378000,
+        explicit=False, source_artists=("Yes", "Guest"),
+    ) == exact
+
+
+@pytest.mark.parametrize("candidate_title", [
+    "Survival (feat. Impostor)",
+    "Survival (feat. Guest) (Live)",
+    "Survival (feat. Guest & Impostor)",
+])
+def test_guest_annotation_cannot_hide_conflicting_credit_or_version(candidate_title):
+    yt = Mock()
+    candidate = song(title=candidate_title, artists=[{"name": "Yes"}, {"name": "Guest"}])
+    yt.search.side_effect = lambda **kw: [candidate] if kw["filter"] == "songs" else []
+    with pytest.raises(MatchNotFound):
+        lookup_song(
+            yt, "Survival", "Yes", "Yes", duration_ms=378000,
+            explicit=False, source_artists=("Yes", "Guest"),
+        )
+
+
+@pytest.mark.parametrize("album, matches", [("?", True), ("!", False), (None, False)])
+def test_punctuation_only_release_titles_stay_distinct(album, matches):
+    yt = Mock()
+    candidate = song(album={"name": album} if album else None)
+    yt.search.side_effect = lambda **kw: [candidate] if kw["filter"] == "songs" else []
+    if matches:
+        assert lookup_song(yt, "Survival", "Yes", "?", duration_ms=378000) == candidate
+    else:
+        with pytest.raises(MatchNotFound):
+            lookup_song(yt, "Survival", "Yes", "?", duration_ms=378000)

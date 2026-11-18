@@ -15,7 +15,7 @@ from ytmusicapi import YTMusic
 from typing import Optional, Union, Iterator, Dict, NamedTuple
 from .matching import ResearchDetails, lookup_song, rank_songs, title_key
 
-MATCH_POLICY = "exact-metadata-v1"
+MATCH_POLICY = "exact-metadata-v2"
 
 
 class SongInfo(NamedTuple):

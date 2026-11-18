@@ -8,11 +8,18 @@ from typing import Optional
 from ytmusicapi.exceptions import YTMusicServerError
 
 
+_GUEST_SUFFIX = re.compile(
+    r"\s*(?:\((?:feat\.?|ft\.?|featuring|with)\s+([^()]+)\)"
+    r"|\s[-–—]\s+(?:feat\.?|ft\.?|featuring)\s+([^()]+))$",
+    re.I,
+)
+
+
 def normalize(value):
     value = unicodedata.normalize("NFKD", value or "").casefold()
     value = value.translate(str.maketrans({"ي": "ی", "ك": "ک", "\u200c": " "}))
     value = "".join(c for c in value if not unicodedata.combining(c))
-    return " ".join(re.sub(r"[^\w]+", " ", value).split())
+    return " ".join(re.sub(r"[^\w]+", " ", value).split()) or value.strip()
 
 
 def title_key(value, strip_decorations=False):
@@ -27,6 +34,25 @@ def title_key(value, strip_decorations=False):
             value,
         )
     return " ".join(value.split())
+
+
+def _title_and_guests(value, known_artists):
+    """Strip a credit only when it names source artists and nothing else."""
+    title = value or ""
+    guests = set()
+    while match := _GUEST_SUFFIX.search(title):
+        label = match[1] or match[2]
+        group = {normalize(label)}
+        if not group <= known_artists:
+            group = {
+                normalize(part)
+                for part in re.split(r",\s*|\s+[&×]\s+|\s+and\s+", label, flags=re.I)
+            }
+        if not group <= known_artists:
+            break
+        guests.update(group)
+        title = title[: match.start()]
+    return normalize(title), guests
 
 
 def duration_seconds(song):
@@ -117,24 +143,36 @@ def rank_songs(
     review_weak=True,
 ):
     expected = {normalize(credit) for credit in (source_artists or (artist,))} - {""}
+    wanted_title, _ = _title_and_guests(title, expected)
+    wanted_artist = normalize(artist)
     ranked = []
     for song in songs:
+        credits = {
+            normalize(credit.get("name")) for credit in song.get("artists") or []
+        }
+        candidate, query_title = song, title
+        if review_weak:
+            actual_title, guests = _title_and_guests(song.get("title"), expected)
+            if (
+                not wanted_title
+                or actual_title != wanted_title
+                or credits | guests != expected
+                or wanted_artist not in credits
+            ):
+                continue
+            credits |= guests
+            candidate = {**song, "title": actual_title}
+            query_title = wanted_title
         score = candidate_score(
-            song, title, artist, album, duration_ms, explicit, strict_album
+            candidate, query_title, artist, album, duration_ms, explicit, strict_album
         )
         if score is None:
             continue
         album_matches, has_duration, duration_delta, artist_credited = score
-        credits = {
-            normalize(credit.get("name")) for credit in song.get("artists") or []
-        }
         credited_count = len(expected & credits)
         explicit_confirmed = explicit is not None and song.get("isExplicit") == explicit
         if review_weak:
             if explicit is not None and not explicit_confirmed:
-                continue
-            # A video title naming an artist does not establish who recorded it.
-            if not artist_credited or credits != expected:
                 continue
             if album and not album_matches:
                 continue
