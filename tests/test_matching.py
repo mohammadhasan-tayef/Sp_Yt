@@ -53,6 +53,20 @@ def test_best_candidate_wins_over_first_hit():
     yt.search.assert_called_once_with(query="Survival Yes", filter="songs", limit=20, ignore_spelling=True)
 
 
+@pytest.mark.parametrize("explicit_title", ["Survival", "Survival (Remix)"])
+def test_explicit_preference_searches_for_the_same_recording(explicit_title):
+    yt = Mock()
+    clean = song()
+    explicit = song(title=explicit_title, isExplicit=True, videoId="explicit001")
+    yt.search.side_effect = [[clean], [explicit]]
+    found = lookup_song(
+        yt, "Survival", "Yes", "Yes", duration_ms=378000, explicit=False,
+        prefer_explicit=True,
+    )
+    assert found == (explicit if explicit_title == "Survival" else clean)
+    assert yt.search.call_args.kwargs["query"] == "Survival Yes Yes explicit"
+
+
 def test_deeper_search_is_used_when_targeted_searches_miss():
     yt = Mock()
     correct = song()

@@ -339,6 +339,7 @@ def copier(
     playlist_mode=False,
     catalog=None,
     no_duplicates=False,
+    prefer_explicit=False,
 ):
     """Copy, checkpoint every source row, and verify destination membership.
 
@@ -429,15 +430,20 @@ def copier(
                 [src_track.title, src_track.artist, src_track.album], ensure_ascii=False
             )
             recording_key = src_track.isrc or source_key
+            match_policy = (
+                f"{MATCH_POLICY}-prefer-explicit"
+                if prefer_explicit and src_track.explicit is not True
+                else MATCH_POLICY
+            )
             cache_key = json.dumps(
-                [MATCH_POLICY, yt_search_algo, review_weak, src_track._asdict()],
+                [match_policy, yt_search_algo, review_weak, src_track._asdict()],
                 sort_keys=True,
             )
             row = {
                 "index": index,
                 "source": src_track._asdict(),
                 "source_key": source_key,
-                "match_policy": MATCH_POLICY,
+                "match_policy": match_policy,
             }
             details = ResearchDetails()
             used_api = False
@@ -466,6 +472,7 @@ def copier(
                         src_track.artists,
                         strict_album=yt_search_algo == 1,
                         review_weak=True,
+                        prefer_explicit=prefer_explicit,
                     )
                     if len(ranked) > 1 and ranked[0][0] == ranked[1][0]:
                         details.songs = [song for _, song in ranked]
@@ -489,6 +496,7 @@ def copier(
                         [cached], src_track.title, src_track.artist, src_track.album,
                         src_track.duration_ms, src_track.explicit, src_track.artists,
                         strict_album=yt_search_algo == 1, review_weak=review_weak,
+                        prefer_explicit=prefer_explicit,
                     ):
                         dst_track = cached
                 if dst_track is None:
@@ -508,6 +516,7 @@ def copier(
                             review_weak=review_weak,
                             album_cache=album_cache,
                             isrc=src_track.isrc,
+                            prefer_explicit=prefer_explicit,
                         ),
                         read_only=True,
                     )
@@ -537,7 +546,8 @@ def copier(
                 elif no_duplicates and candidates and rank_songs(
                     ({**item, "isAvailable": True} for item in candidates.values()),
                     src_track.title, src_track.artist, "", src_track.duration_ms,
-                    src_track.explicit, src_track.artists, review_weak=True,
+                    False if prefer_explicit else src_track.explicit,
+                    src_track.artists, review_weak=True, prefer_explicit=prefer_explicit,
                 ):
                     raise ValueError("A similar recording is already listed; addition deferred to avoid a duplicate")
                 elif dry_run:
@@ -737,6 +747,7 @@ def copy_playlist(
     existing_only=False,
     catalog=None,
     no_duplicates=False,
+    prefer_explicit=False,
 ):
     """Copy one playlist; dry runs never create a destination playlist."""
     # Resolve and validate the source before making any destination changes.
@@ -791,6 +802,7 @@ def copy_playlist(
         playlist_mode=True,
         catalog=catalog,
         no_duplicates=no_duplicates,
+        prefer_explicit=prefer_explicit,
     )
 
 
@@ -810,6 +822,7 @@ def copy_all_playlists(
     existing_only=False,
     catalog=None,
     no_duplicates=False,
+    prefer_explicit=False,
 ):
     """Copy playlists with shared search caches and per-playlist reconciliation."""
     spotify_pls = load_playlists_json(spotify_playlist_file, spotify_playlists_encoding)
@@ -845,6 +858,7 @@ def copy_all_playlists(
                 existing_only=existing_only,
                 catalog=catalog,
                 no_duplicates=no_duplicates,
+                prefer_explicit=prefer_explicit,
             )
             if _http_status(results[src_pl["id"]].get("verification_error", "")) in (
                 401,

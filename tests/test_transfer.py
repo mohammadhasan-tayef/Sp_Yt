@@ -141,6 +141,21 @@ def test_no_duplicates_defers_when_an_alternate_version_is_already_listed(yt, tr
     yt.rate_song.assert_not_called()
 
 
+def test_likes_explicit_preference_does_not_duplicate_a_clean_copy(yt, track, match, tmp_path):
+    yt.get_liked_songs.return_value = {
+        "tracks": [{**match.return_value, "videoId": "cleanvideo1"}],
+    }
+    match.return_value["isExplicit"] = True
+    result = backend.copier(
+        iter([track._replace(explicit=True)]), yt=yt,
+        audit_existing=True, no_duplicates=True, prefer_explicit=True,
+        track_sleep=0, report_file=tmp_path / "report.jsonl",
+    )
+    assert result["failed"] == 1
+    assert "avoid a duplicate" in rows(tmp_path / "report.jsonl")[0]["error"]
+    yt.rate_song.assert_not_called()
+
+
 def test_lost_duplicate_add_response_is_reconciled_before_retry(
     yt, track, match, tmp_path, monkeypatch
 ):

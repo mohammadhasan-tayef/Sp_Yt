@@ -150,6 +150,7 @@ def rank_songs(
     source_artists=(),
     strict_album=False,
     review_weak=True,
+    prefer_explicit=False,
 ):
     expected = {normalize(credit) for credit in (source_artists or (artist,))} - {""}
     wanted_title, _ = _title_and_guests(title, expected)
@@ -179,16 +180,18 @@ def rank_songs(
             if wanted_album == actual_album == wanted_title:
                 query_album = wanted_album
                 candidate["album"] = {"name": actual_album}
+        preferred_version = prefer_explicit and song.get("isExplicit") is True
+        required_rating = True if preferred_version else explicit
         score = candidate_score(
-            candidate, query_title, artist, query_album, duration_ms, explicit, strict_album
+            candidate, query_title, artist, query_album, duration_ms, required_rating, strict_album
         )
         if score is None:
             continue
         album_matches, has_duration, duration_delta, artist_credited = score
         credited_count = len(expected & credits)
-        explicit_confirmed = explicit is not None and song.get("isExplicit") == explicit
+        explicit_confirmed = required_rating is not None and song.get("isExplicit") == required_rating
         if review_weak:
-            if explicit is not None and not explicit_confirmed:
+            if required_rating is not None and not explicit_confirmed:
                 continue
             if album and not album_matches:
                 continue
@@ -200,6 +203,7 @@ def rank_songs(
                 continue
         rank = (
             album_matches,
+            preferred_version,
             credited_count,
             explicit_confirmed,
             has_duration,
@@ -224,6 +228,7 @@ def lookup_song(
     source_artists=(),
     review_weak=True,
     isrc=None,
+    prefer_explicit=False,
 ):
     """Search songs, albums and videos; never substitute on title alone.
 
@@ -282,6 +287,7 @@ def lookup_song(
             source_artists,
             strict_album=yt_search_algo == 1,
             review_weak=review_weak,
+            prefer_explicit=prefer_explicit,
         )
         if not ranked or (
             review_weak and len(ranked) > 1 and ranked[0][0] == ranked[1][0]
@@ -291,6 +297,12 @@ def lookup_song(
 
     collect(search(details.query, "songs", required=True))
     selected = select()
+    if prefer_explicit and explicit is not True and (
+        not selected or selected.get("isExplicit") is not True
+    ):
+        query = " ".join(part for part in (details.query, album_name, "explicit") if part)
+        collect(search(query, "songs", limit=10))
+        selected = select()
     # Album lookup can distinguish same-title recordings and release variants.
     if selected and (
         review_weak

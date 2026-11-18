@@ -174,6 +174,10 @@ def _transfer_parser():
         help="Keep one copy of each recording and flag possible existing versions",
     )
     parser.add_argument(
+        "--prefer-explicit", action="store_true",
+        help="Prefer an uncensored version when it matches the recording",
+    )
+    parser.add_argument(
         "--review-weak",
         action="store_true",
         default=True,
@@ -204,6 +208,7 @@ def _copy_options(args):
         review_weak=args.review_weak,
         catalog=backend.get_public_catalog() if args.public_catalog else None,
         no_duplicates=args.no_duplicates,
+        prefer_explicit=args.prefer_explicit,
     )
 
 
@@ -223,6 +228,7 @@ def load_liked_albums():
             source_playlist_id="liked-albums",
             review_weak=args.review_weak,
             no_duplicates=args.no_duplicates,
+            prefer_explicit=args.prefer_explicit,
             catalog=backend.get_public_catalog() if args.public_catalog else None,
         )
     )
@@ -248,6 +254,7 @@ def load_liked():
             review_weak=args.review_weak,
             audit_existing=True,
             no_duplicates=args.no_duplicates,
+            prefer_explicit=args.prefer_explicit,
             catalog=backend.get_public_catalog() if args.public_catalog else None,
         )
     )
