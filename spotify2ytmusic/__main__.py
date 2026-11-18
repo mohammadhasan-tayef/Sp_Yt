@@ -4,10 +4,18 @@ from . import cli
 import sys
 import inspect
 
+
 def list_commands(module):
     # include only functions defined in e.g. 'cli' module
-    commands = [name for name, obj in inspect.getmembers(module) if inspect.isfunction(obj)]
+    commands = [
+        name
+        for name, obj in inspect.getmembers(module)
+        if inspect.isfunction(obj)
+        and obj.__module__ == module.__name__
+        and not name.startswith("_")
+    ]
     return commands
+
 
 available_commands = list_commands(cli)
 

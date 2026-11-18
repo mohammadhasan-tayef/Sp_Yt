@@ -7,6 +7,26 @@ import pprint
 from . import backend
 
 
+def import_exportify():
+    """Import an Exportify CSV, folder of CSVs, or Export All ZIP locally."""
+    from .exportify import import_exportify as convert
+
+    parser = ArgumentParser()
+    parser.add_argument("source", help="CSV file, directory, or ZIP file")
+    parser.add_argument("--output", default="playlists.json")
+    parser.add_argument(
+        "--force", action="store_true", help="Replace an existing output file"
+    )
+    parser.add_argument(
+        "--part-size",
+        type=int,
+        default=5000,
+        help="Split large playlists into parts of this many rows (maximum 5000)",
+    )
+    args = parser.parse_args()
+    convert(args.source, args.output, overwrite=args.force, part_size=args.part_size)
+
+
 def list_liked_albums():
     """
     List albums that have been liked.
@@ -74,6 +94,7 @@ def search():
         parser.add_argument(
             "--artist",
             type=str,
+            required=True,
             help="Artist to look up",
         )
         parser.add_argument(
@@ -84,8 +105,9 @@ def search():
         parser.add_argument(
             "--algo",
             type=int,
-            default=0,
-            help="Algorithm to use for search (0 = exact, 1 = extended, 2 = approximate)",
+            default=2,
+            choices=(0, 1, 2),
+            help="0: title/artist, 1: also album, 2: extended search including videos",
         )
         return parser.parse_args()
 
@@ -108,238 +130,177 @@ def search():
             pprint.pprint(song)
 
 
+def _transfer_parser():
+    parser = ArgumentParser()
+    parser.add_argument("--track-sleep", type=float, default=0.1)
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview matches without creating playlists or adding tracks",
+    )
+    parser.add_argument("--spotify-playlists-encoding", default="utf-8")
+    parser.add_argument("--spotify-playlist-file", default="playlists.json")
+    parser.add_argument(
+        "--algo",
+        type=int,
+        choices=(0, 1, 2),
+        default=2,
+        help="0: title/artist, 1: also album, 2: extended search including videos (default)",
+    )
+    order = parser.add_mutually_exclusive_group()
+    order.add_argument(
+        "--reverse-playlist",
+        action="store_true",
+        help="Reverse Spotify order (default: preserve order)",
+    )
+    order.add_argument(
+        "--no-reverse-playlist", dest="reverse_playlist", action="store_false"
+    )
+    parser.set_defaults(reverse_playlist=False)
+    parser.add_argument(
+        "--report",
+        default="transfer-report.jsonl",
+        help="Append per-track results and verification summaries to this JSONL file",
+    )
+    parser.add_argument(
+        "--overrides", help="JSON mapping Spotify track IDs to YouTube video IDs"
+    )
+    parser.add_argument(
+        "--review-weak",
+        action="store_true",
+        help="Leave ambiguous or weak matches for manual review",
+    )
+    return parser
+
+
+def _check_result(result):
+    if result.get("failed") or result.get("verification_error"):
+        raise SystemExit(2)
+
+
+def _copy_options(args):
+    return dict(
+        track_sleep=args.track_sleep,
+        dry_run=args.dry_run,
+        spotify_playlists_encoding=args.spotify_playlists_encoding,
+        reverse_playlist=args.reverse_playlist,
+        yt_search_algo=args.algo,
+        spotify_playlist_file=args.spotify_playlist_file,
+        report_file=args.report,
+        overrides=backend.load_overrides(args.overrides),
+        privacy_status=args.privacy,
+        review_weak=args.review_weak,
+    )
+
+
 def load_liked_albums():
-    """
-    Load the "Liked" albums from Spotify into YTMusic.  Spotify stores liked albums separately
-    from liked songs, so "load_liked" does not see the albums, you instead need to use this.
-    """
-
-    def parse_arguments():
-        parser = ArgumentParser()
-        parser.add_argument(
-            "--track-sleep",
-            type=float,
-            default=0.1,
-            help="Time to sleep between each track that is added (default: 0.1)",
+    """Load tracks from liked albums, with a per-track report."""
+    args = _transfer_parser().parse_args()
+    _check_result(
+        backend.copier(
+            backend.iter_spotify_liked_albums(
+                args.spotify_playlist_file, args.spotify_playlists_encoding
+            ),
+            dry_run=args.dry_run,
+            track_sleep=args.track_sleep,
+            yt_search_algo=args.algo,
+            report_file=args.report,
+            overrides=backend.load_overrides(args.overrides),
+            source_playlist_id="liked-albums",
+            review_weak=args.review_weak,
         )
-        parser.add_argument(
-            "--dry-run",
-            action="store_true",
-            help="Do not add songs to destination playlist (default: False)",
-        )
-        parser.add_argument(
-            "--spotify-playlists-encoding",
-            default="utf-8",
-            help="The encoding of the `playlists.json` file.",
-        )
-        parser.add_argument(
-            "--algo",
-            type=int,
-            default=0,
-            help="Algorithm to use for search (0 = exact, 1 = extended, 2 = approximate)",
-        )
-
-        return parser.parse_args()
-
-    args = parse_arguments()
-
-    spotify_pls = backend.load_playlists_json()
-
-    backend.copier(
-        backend.iter_spotify_liked_albums(
-            spotify_encoding=args.spotify_playlists_encoding
-        ),
-        None,
-        args.dry_run,
-        args.track_sleep,
-        args.algo,
     )
 
 
 def load_liked():
-    """
-    Load the "Liked Songs" playlist from Spotify into YTMusic.
-    """
-
-    def parse_arguments():
-        parser = ArgumentParser()
-        parser.add_argument(
-            "--track-sleep",
-            type=float,
-            default=0.1,
-            help="Time to sleep between each track that is added (default: 0.1)",
+    """Load Spotify liked songs into YouTube Music liked songs."""
+    args = _transfer_parser().parse_args()
+    _check_result(
+        backend.copier(
+            backend.iter_spotify_playlist(
+                None,
+                args.spotify_playlist_file,
+                args.spotify_playlists_encoding,
+                args.reverse_playlist,
+            ),
+            dry_run=args.dry_run,
+            track_sleep=args.track_sleep,
+            yt_search_algo=args.algo,
+            report_file=args.report,
+            overrides=backend.load_overrides(args.overrides),
+            source_playlist_id="liked-songs",
+            review_weak=args.review_weak,
         )
-        parser.add_argument(
-            "--dry-run",
-            action="store_true",
-            help="Do not add songs to destination playlist (default: False)",
-        )
-        parser.add_argument(
-            "--spotify-playlists-encoding",
-            default="utf-8",
-            help="The encoding of the `playlists.json` file.",
-        )
-        parser.add_argument(
-            "--algo",
-            type=int,
-            default=0,
-            help="Algorithm to use for search (0 = exact, 1 = extended, 2 = approximate)",
-        )
-        parser.add_argument(
-            "--reverse-playlist",
-            action="store_true",
-            help="Reverse playlist on load, normally this is not set for liked songs as "
-            "they are added in the opposite order from other commands in this program.",
-        )
-
-        return parser.parse_args()
-
-    args = parse_arguments()
-
-    backend.copier(
-        backend.iter_spotify_playlist(
-            None,
-            spotify_encoding=args.spotify_playlists_encoding,
-            reverse_playlist=args.reverse_playlist,
-        ),
-        None,
-        args.dry_run,
-        args.track_sleep,
-        args.algo,
     )
 
 
 def copy_playlist():
-    """
-    Copy a Spotify playlist to a YTMusic playlist
-    """
-
-    def parse_arguments():
-        parser = ArgumentParser()
-        parser.add_argument(
-            "--track-sleep",
-            type=float,
-            default=0.1,
-            help="Time to sleep between each track that is added (default: 0.1)",
+    """Copy one Spotify playlist to a YouTube Music playlist ID or +name."""
+    parser = _transfer_parser()
+    parser.add_argument(
+        "spotify_playlist_id",
+        help="Source ID, or 'liked-songs' for the Spotify likes export",
+    )
+    parser.add_argument(
+        "ytmusic_playlist_id", help="Destination ID or '+New Playlist Name'"
+    )
+    parser.add_argument(
+        "--existing-only",
+        action="store_true",
+        help="Audit and fill gaps in an existing playlist only",
+    )
+    parser.add_argument(
+        "--privacy", choices=("PRIVATE", "PUBLIC", "UNLISTED"), default="PRIVATE"
+    )
+    args = parser.parse_args()
+    _check_result(
+        backend.copy_playlist(
+            args.spotify_playlist_id,
+            args.ytmusic_playlist_id,
+            existing_only=args.existing_only,
+            **_copy_options(args),
         )
-        parser.add_argument(
-            "--dry-run",
-            action="store_true",
-            help="Do not add songs to destination playlist (default: False)",
-        )
-        parser.add_argument(
-            "spotify_playlist_id",
-            type=str,
-            help="ID of the Spotify playlist to copy from",
-        )
-        parser.add_argument(
-            "ytmusic_playlist_id",
-            type=str,
-            help="ID of the YTMusic playlist to copy to.  If this argument starts with a '+', it is asumed to be the playlist title rather than playlist ID, and if a playlist of that name is not found, it will be created (without the +).  Example: '+My Favorite Blues'.  NOTE: The shell will require you to quote the name if it contains spaces.",
-        )
-        parser.add_argument(
-            "--spotify-playlists-encoding",
-            default="utf-8",
-            help="The encoding of the `playlists.json` file.",
-        )
-        parser.add_argument(
-            "--algo",
-            type=int,
-            default=0,
-            help="Algorithm to use for search (0 = exact, 1 = extended, 2 = approximate)",
-        )
-        parser.add_argument(
-            "--no-reverse-playlist",
-            action="store_true",
-            help="Do not reverse playlist on load, regular playlists are reversed normally "
-            "so they end up in the same order as on Spotify.",
-        )
-        parser.add_argument(
-            "--privacy",
-            default="PRIVATE",
-            help="The privacy seting of created playlists (PRIVATE, PUBLIC, UNLISTED, default PRIVATE)",
-        )
-
-        return parser.parse_args()
-
-    args = parse_arguments()
-    backend.copy_playlist(
-        spotify_playlist_id=args.spotify_playlist_id,
-        ytmusic_playlist_id=args.ytmusic_playlist_id,
-        track_sleep=args.track_sleep,
-        dry_run=args.dry_run,
-        spotify_playlists_encoding=args.spotify_playlists_encoding,
-        reverse_playlist=not args.no_reverse_playlist,
-        privacy_status=args.privacy,
     )
 
 
 def copy_all_playlists():
-    """
-    Copy all Spotify playlists (except Liked Songs) to YTMusic playlists
-    """
-
-    def parse_arguments():
-        parser = ArgumentParser()
-        parser.add_argument(
-            "--track-sleep",
-            type=float,
-            default=0.1,
-            help="Time to sleep between each track that is added (default: 0.1)",
-        )
-        parser.add_argument(
-            "--dry-run",
-            action="store_true",
-            help="Do not add songs to destination playlist (default: False)",
-        )
-        parser.add_argument(
-            "--spotify-playlists-encoding",
-            default="utf-8",
-            help="The encoding of the `playlists.json` file.",
-        )
-        parser.add_argument(
-            "--algo",
-            type=int,
-            default=0,
-            help="Algorithm to use for search (0 = exact, 1 = extended, 2 = approximate)",
-        )
-        parser.add_argument(
-            "--no-reverse-playlist",
-            action="store_true",
-            help="Do not reverse playlist on load, regular playlists are reversed normally "
-            "so they end up in the same order as on Spotify.",
-        )
-        parser.add_argument(
-            "--privacy",
-            default="PRIVATE",
-            help="The privacy seting of created playlists (PRIVATE, PUBLIC, UNLISTED, default PRIVATE)",
-        )
-
-        return parser.parse_args()
-
-    args = parse_arguments()
-    backend.copy_all_playlists(
-        track_sleep=args.track_sleep,
-        dry_run=args.dry_run,
-        spotify_playlists_encoding=args.spotify_playlists_encoding,
-        reverse_playlist=not args.no_reverse_playlist,
-        privacy_status=args.privacy,
+    """Copy every Spotify playlist except the synthetic Liked Songs playlist."""
+    parser = _transfer_parser()
+    parser.add_argument(
+        "--existing-only",
+        action="store_true",
+        help="Audit and fill gaps in existing playlists only",
     )
+    parser.add_argument(
+        "--playlist-prefix",
+        default="",
+        help="Prefix destination names to build a separate set of playlists",
+    )
+    parser.add_argument(
+        "--privacy", choices=("PRIVATE", "PUBLIC", "UNLISTED"), default="PRIVATE"
+    )
+    args = parser.parse_args()
+    results = backend.copy_all_playlists(
+        playlist_prefix=args.playlist_prefix,
+        existing_only=args.existing_only,
+        **_copy_options(args),
+    )
+    if any(
+        result.get("failed") or result.get("verification_error")
+        for result in results.values()
+    ):
+        raise SystemExit(2)
 
 
 def gui():
-    """
-    Run the Spotify2YTMusic GUI.
-    """
+    """Run the Spotify2YTMusic GUI."""
     from . import gui
 
     gui.main()
 
 
 def ytoauth():
-    """
-    Run the "ytmusicapi oauth" login.
-    """
+    """Run the ytmusicapi OAuth setup."""
     from ytmusicapi.setup import main
 
     sys.argv = ["ytmusicapi", "oauth"]

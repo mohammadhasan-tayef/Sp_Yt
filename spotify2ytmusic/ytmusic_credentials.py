@@ -4,7 +4,7 @@ import os
 
 
 def setup_ytmusic_with_raw_headers(
-    input_file="raw_headers.txt", credentials_file="oauth.json"
+    input_file="raw_headers.local.txt", credentials_file="oauth.json"
 ):
     """
     Loads raw headers from a file and sets up YTMusic connection using ytmusicapi.setup.
@@ -21,7 +21,7 @@ def setup_ytmusic_with_raw_headers(
         raise FileNotFoundError(f"Input file {input_file} does not exist.")
 
     # Read the raw headers from the file
-    with open(input_file, "r") as file:
+    with open(input_file, "r", encoding="utf-8") as file:
         headers_raw = file.read()
 
     # Use ytmusicapi.setup to process headers and save the credentials
@@ -35,7 +35,7 @@ def setup_ytmusic_with_raw_headers(
 if __name__ == "__main__":
     try:
         # Specify file paths
-        raw_headers_file = "raw_headers.txt"
+        raw_headers_file = "raw_headers.local.txt"
         credentials_file = "oauth.json"
 
         # Set up YTMusic with raw headers
@@ -48,3 +48,4 @@ if __name__ == "__main__":
 
     except Exception as e:
         print(f"An error occurred: {e}")
+        raise SystemExit(1)

@@ -173,4 +173,10 @@ cython_debug/
 # sensitive info
 oauth.json
 raw_headers.txt
+raw_headers.local.txt
 playlists.json
+browser.json
+matches.json
+settings.json
+transfer-report*.jsonl
+exports/

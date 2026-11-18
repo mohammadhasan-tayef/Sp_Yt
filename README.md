@@ -1,307 +1,260 @@
-### Overview
+# Spotify to YouTube Music — local transfer
 
-This is a set of scripts for copying "liked" songs and playlists from Spotify to YTMusic. It provides a GUI (implemented by Yoween, formerly called spotify_to_ytmusic_gui).
+Copy Spotify playlists and liked songs to YouTube Music using local Python code.
+The importer and transfer use no paid transfer service or paid transfer quota.
+A YouTube Music account is needed to save playlists.
 
----
+This checkout adds an **Exportify CSV/ZIP workflow**, broader track searches,
+per-track reports, resumable additions, and destination verification to the upstream
+project. Use the command line workflow below for a large archive.
 
-### Preparation/Pre-Conditions
+## Windows setup
 
-1. **Install Python and Git** (you may already have them installed).
-2. **Uninstall the pip package from the original repository** (if you previously installed `linsomniac/spotify_to_ytmusic`):
+Python 3.10 or newer is required. Run these commands from the project directory:
 
-   On Windows:
-
-   ```bash
-   python -m pip uninstall spotify2ytmusic
-   ```
-
-   On Linux or Mac:
-
-   ```bash
-   python3 -m pip uninstall spotify2ytmusic
-   ```
-
----
-
-### Setup Instructions
-
-#### 1. Clone, Create a Virtual Environment, and Install Required Packages
-
-Start by creating and activating a Python virtual environment to isolate dependencies.
-
-```bash
-git clone https://github.com/linsomniac/spotify_to_ytmusic.git
-cd spotify_to_ytmusic
-```
-
-On Windows:
-
-```bash
+```powershell
 python -m venv .venv
-.venv\Scripts\activate
-pip install ytmusicapi tk
+.\.venv\Scripts\python.exe -m pip install -e .
 ```
 
-On Linux or Mac:
+The virtual environment is already installed in this workspace. Calling its Python
+directly avoids PowerShell activation-policy problems. On Linux/macOS use
+`.venv/bin/python` in place of `.\.venv\Scripts\python.exe`.
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install ytmusicapi tk
+## 1. Import your fresh Exportify export
+
+Use [Exportify](https://github.com/watsonbox/exportify) to export your playlists.
+Its **Export All** download is a ZIP containing individual CSVs. This importer
+accepts a ZIP, a folder of CSVs, or a single CSV. It never calls Spotify.
+
+```powershell
+.\.venv\Scripts\python.exe -m spotify2ytmusic import_exportify ".\exports\spotify.zip"
 ```
 
----
+Replace the input with your actual file/folder path. This writes `playlists.json`
+and prints each source playlist's local ID, name, and track count. Existing output
+is protected; use `--force` only to intentionally replace an old backup.
 
-#### 2. Generate YouTube Music Credentials
+- CSV row order, Unicode names, all artist credits, duration and explicit flags are retained.
+- Playlists exceeding 5,000 source rows become numbered parts. `--part-size 4000`
+  can make smaller parts when needed. Parts have stable IDs while filenames stay the same.
+- `liked_songs.csv` and numbered downloads such as `Liked_Songs (3).csv` become
+  the separate Liked Songs source. Use step 5 for it.
+- `saved_albums.csv` is an album inventory without song lists. The importer prints
+  a notice and excludes that file. Export album tracks as playlists to transfer them.
+- Importing shows the exact number of rows read. Compare this with Exportify's
+  counts to confirm the export itself is complete.
 
-To use the YouTube Music API, you need to generate valid credentials. Follow these steps:
+The importer supports the documented English Exportify track columns: `Track URI`,
+`Track Name`, `Artist Name(s)`, `Album Name`, `Track Duration (ms)`, and `Explicit?`.
+The last two are optional and can also be called `Duration (ms)` and `Explicit`.
+Artist names are separated by semicolons. CSV fields
+with commas/quotes and a UTF-8 BOM are supported.
 
-1. **Log in to YouTube Music**: Open YouTube Music in Firefox and ensure you are logged in.
-2. **Open the Inspection Tool**: Press `F12` or right-click and select _Inspect_ to open the browser's inspection tool.
-3. **Access the Network Tab**: Navigate to the Network tab and filter by `/browse`.
-4. **Select a Request**: Click one of the requests under the filtered results and locate the _Request Headers_ section.
-5. **Toggle RAW View**: Click the RAW toggle button to view the headers in raw format.
-6. **Copy Headers**: Right-click, choose _Select All_, and copy the content.
-7. **Paste into `raw_headers.txt`**: Open the `raw_headers.txt` file located in the main directory of this project and paste the copied content into it.
+## 2. Set up YouTube Music login locally
 
-**Run the Script**:
+Browser-header authentication needs no Spotify developer application or Google
+OAuth client. In Firefox, sign in at [YouTube Music](https://music.youtube.com/),
+open Developer Tools → Network, and select a request to `/browse`. Copy the raw
+request headers into `raw_headers.local.txt` in this project directory. Then run:
 
-Execute the following command to generate the credentials file:
-
-On Windows:
-
-```bash
-python spotify2ytmusic/ytmusic_credentials.py
+```powershell
+.\.venv\Scripts\python.exe -m spotify2ytmusic.ytmusic_credentials
 ```
 
-On Linux or Mac:
+This creates the local `oauth.json` file. Despite its historical filename, this
+workflow stores browser headers in that file. Keep credentials local; do not commit
+them. The default credential and report filenames are ignored by Git.
 
-```bash
-python3 spotify2ytmusic/ytmusic_credentials.py
+For an existing OAuth token file, set `YTMUSIC_CLIENT_ID` and
+`YTMUSIC_CLIENT_SECRET` to the custom OAuth client's credentials. Set
+`YTMUSIC_AUTH_FILE` to use a credential filename other than `oauth.json`.
+See [ytmusicapi authentication documentation](https://ytmusicapi.readthedocs.io/en/stable/setup/index.html).
+
+## 3. Preview matches
+
+```powershell
+.\.venv\Scripts\python.exe -m spotify2ytmusic copy_all_playlists --dry-run --algo 2
 ```
 
-**Important**: After running this script, the authentication file will be created.
-When you launch the GUI in the next step, it will automatically detect this file and log in to YouTube Music without requiring manual input. You’ll see a log message confirming this:
+This performs searches and writes `transfer-report.jsonl`. It creates no playlists,
+adds no songs, and changes no likes. Already existing destination playlists are read
+in full, including beyond their first 100 entries.
 
-```
-File detected, auto login
-```
+A report contains a record for every attempted source row, including the source ID,
+chosen YouTube video ID, result status, and candidates/queries for failed searches.
+Each playlist run ends with a summary. Rows are flushed as the run progresses, so
+an interruption retains completed work. A report without a summary is an interrupted
+run, not a completed transfer.
 
-The GUI will **ignore the 'Login to YT Music' tab** and jump straight to the 'Spotify Backup' tab.
+Use `--report preview.jsonl` for a separate preview report if desired. Using the same
+report for preview and transfer reuses successful matches and saves repeat searches.
 
----
+## 4. Transfer playlists and verify
 
-#### 3. Use the GUI for Migration
+To repair a previous transfer, start with the existing destination playlists:
 
-Now you can use the graphical user interface (GUI) to migrate your playlists and liked songs to YouTube Music. Start the GUI with the following command:
-
-On Windows:
-
-```bash
-python -m spotify2ytmusic gui
-```
-
-On Linux or Mac:
-
-```bash
-python3 -m spotify2ytmusic gui
+```powershell
+.\.venv\Scripts\python.exe -m spotify2ytmusic copy_all_playlists --existing-only --dry-run --report transfer-report-repair.jsonl
 ```
 
----
-
-### GUI Features
-
-Once the GUI is running, you can:
-
-- **Backup Your Spotify Playlists**: Save your playlists and liked songs into the file `playlists.json`.
-- **Load Liked Songs**: Migrate your Spotify liked songs to YouTube Music.
-- **List Playlists**: View your playlists and their details.
-- **Copy All Playlists**: Migrate all Spotify playlists to YouTube Music.
-- **Copy a Specific Playlist**: Select and migrate a specific Spotify playlist to YouTube Music.
-
----
-
-### Import Your Liked Songs - Tab 3
-
-#### Click the `import` button, and wait until it finished and switched to the next tab
-
-It will go through your Spotify liked songs, and like them on YTMusic. It will display
-the song from Spotify and then the song that it found on YTMusic that it is liking. I've
-spot-checked my songs and it seems to be doing a good job of matching YTMusic songs with
-Spotify. So far I haven't seen a single failure across a couple hundred songs, but more
-esoteric titles it may have issues with.
-
-### List Your Playlists - Tab 4
-
-#### Click the `list` button, and wait until it finished and switched to the next tab
-
-This will list the playlists you have on both Spotify and YTMusic, so you can individually copy them.
-
-### Copy Your Playlists - Tab 5
-
-You can either copy **all** playlists, or do a more surgical copy of individual playlists.
-Copying all playlists will use the name of the Spotify playlist as the destination playlist name on YTMusic.
-
-#### To copy all the playlists click the `copy` button, and wait until it finished and switched to the next tab
-
-**NOTE**: This does not copy the Liked playlist (see above to do that).
-
-### Copy specific Playlist - Tab 6
-
-In the list output, find the "playlist id" (the first column) of the Spotify playlist and of the YTMusic playlist.
-
-#### Then fill both input fields and click the `copy` button
-
-The copy playlist will take the name of the YTMusic playlist and will create the
-playlist if it does not exist, if you start the YTMusic playlist with a "+":
-
-Re-running "copy_playlist" or "load_liked" in the event that it fails should be safe, it
-will not duplicate entries on the playlist.
-
-## Command Line Usage
-
-### Ways to Run
-
-**NOTE**: There are two possible ways to run these commands, one is via standalone commands
-if the application was installed, which takes the form of: `s2yt_load_liked`
-
-If not fully installed, you can replace the "s2yt\_" with "python -m spotify2ytmusic", for
-example: `s2yt_load_liked` becomes `python -j spotify2ytmusic load_liked`
-
-### Login to YTMusic
-
-See "Generate YouTube Music Credentials" above.
-
-### Backup Your Spotify Playlists
-
-Run `spotify2ytmusic/spotify_backup.py` and it will help you authorize access to your spotify account.
-
-Run: `python3 spotify_backup.py playlists.json --dump=liked,playlists --format=json`
-
-This will save your playlists and liked songs into the file "playlists.json".
-
-### Import Your Liked Songs
-
-Run: `s2yt_load_liked`
-
-It will go through your Spotify liked songs, and like them on YTMusic. It will display
-the song from spotify and then the song that it found on YTMusic that it is liking. I've
-spot-checked my songs and it seems to be doing a good job of matching YTMusic songs with
-Spotify. So far I haven't seen a single failure across a couple thousand songs, but more
-esoteric titles it may have issues with.
-
-### Import Your Liked Albums
-
-Run: `s2yt_load_liked_albums`
-
-Spotify stores liked albums outside of the "Liked Songs" playlist. This is the command to
-load your liked albums into YTMusic liked songs.
-
-### List Your Playlists
-
-Run `s2yt_list_playlists`
-
-This will list the playlists you have on both Spotify and YTMusic. You will need to
-individually copy them.
-
-### Copy Your Playlists
-
-You can either copy **all** playlists, or do a more surgical copy of individual playlists.
-Copying all playlists will use the name of the Spotify playlist as the destination
-playlist name on YTMusic. To copy all playlists, run:
-
-`s2yt_copy_all_playlists`
-
-**NOTE**: This does not copy the Liked playlist (see above to do that).
-
-In the list output above, find the "playlist id" (the first column) of the Spotify playlist,
-and of the YTMusic playlist, and then run:
-
-`s2yt_copy_playlist <SPOTIFY_PLAYLIST_ID> <YTMUSIC_PLAYLIST_ID>`
-
-If you need to create a playlist, you can run:
-
-`s2yt_create_playlist "<PLAYLIST_NAME>"`
-
-_Or_ the copy playlist can take the name of the YTMusic playlist and will create the
-playlist if it does not exist, if you start the YTMusic playlist with a "+":
-
-`s2yt_copy_playlist <SPOTIFY_PLAYLIST_ID> +<YTMUSIC_PLAYLIST_NAME>`
-
-For example:
-
-`s2yt_copy_playlist SPOTIFY_PLAYLIST_ID "+Feeling Like a PUNK"`
-
-Re-running "copy_playlist" or "load_liked" in the event that it fails should be safe, it
-will not duplicate entries on the playlist.
-
-### Searching for YTMusic Tracks
-
-This is mostly for debugging, but there is a command to search for tracks in YTMusic:
-
-## `s2yt_search --artist <ARTIST> --album <ALBUM> <TRACK_NAME>`
-
-## Details About Search Algorithms
-
-The function first searches for albums by the given artist name on YTMusic.
-
-It then iterates over the first three album results and tries to find a track with
-the exact same name as the given track name. If it finds a match, it returns the
-track information.
-
-If the function can't find the track in the albums, it then searches for songs by the
-given track name and artist name.
-
-Depending on the yt_search_algo parameter, it performs one of the following actions:
-
-If yt_search_algo is 0, it simply returns the first song result.
-
-If yt_search_algo is 1, it iterates over the song results and returns the first song
-that matches the track name, artist name, and album name exactly. If it can't find a
-match, it raises a ValueError.
-
-If yt_search_algo is 2, it performs a fuzzy match. It removes everything in brackets
-in the song title and checks for a match with the track name, artist name, and album
-name. If it can't find a match, it then searches for videos with the track name and
-artist name. If it still can't find a match, it raises a ValueError.
-
-If the function can't find the track using any of the above methods, it raises a
-ValueError.
-
-## FAQ
-
-- My copy is failing after 20-40 minutes. Is my session timing out?
-
-Try playing music in the browser on Youtube Music while you are loading the playlists,
-this has been reported to keep the session from timing out.
-
-- Does this run on mobile?
-
-No, this runs on Linux/Windows/MacOS.
-
-- How does the lookup algorithm work?
-
-  Given the Spotify track information, it does a lookup for the album by the same artist
-  on YTMusic, then looks at the first 3 hits looking for a track with exactly the same
-  name. In the event that it can't find that exact track, it then does a search of songs
-  for the track name by the same artist and simply returns the first hit.
-
-  The idea is that finding the album and artist and then looking for the exact track match
-  will be more likely to be accurate than searching for the song and artist and relying on
-  the YTMusic algorithm to figure things out, especially for short tracks that might be
-  have many contradictory hits like "Survival by Yes".
-
-- My copy is failing with repeated "ERROR: (Retrying) Server returned HTTP 400: Bad
-  Request".
-
-  Try running with "--track-sleep=3" argument to do a 3 second sleep between tracks. This
-  will take much longer, but may succeed where faster rates have failed.
+This mode never creates a playlist and automatically enables stricter recording
+matching. It checks the full destination before searching, so a correct recording
+on a different video ID can count as present. The report includes `planned` additions,
+unresolved source tracks, and `destination_review` rows whose existing entries
+could not be matched to this export. Review those entries before removing anything.
+After reviewing the preview, rerun the same command without `--dry-run` to add the
+missing matches. If a destination was renamed or its name is ambiguous, use its
+exact playlist ID with `copy_playlist SOURCE_ID DESTINATION_ID --existing-only`.
+
+When you deliberately want a new playlist, preview `copy_playlist SOURCE_ID
+"+New Playlist Name" --review-weak --dry-run` first. The `+` form creates the
+named playlist if absent when you run it without `--dry-run` or `--existing-only`.
+
+```powershell
+.\.venv\Scripts\python.exe -m spotify2ytmusic copy_all_playlists --algo 2 --track-sleep 1
+```
+
+To rebuild alongside previous attempts, use a prefix for new private destinations.
+Add `--dry-run` first to preview the matches and names. After reviewing the report,
+run the same commands without `--dry-run`.
+
+```powershell
+.\.venv\Scripts\python.exe -m spotify2ytmusic copy_all_playlists --playlist-prefix "Spotify - " --review-weak --track-sleep 1
+.\.venv\Scripts\python.exe -m spotify2ytmusic copy_playlist liked-songs "+Spotify - Liked Songs" --review-weak --track-sleep 1
+```
+
+The second command keeps reconstructed Spotify likes in a regular private playlist.
+Use `load_liked` if you want these tracks in YouTube Music's built-in Liked Songs.
+For filling gaps in an existing playlist, use `copy_playlist` with the exact
+YouTube playlist ID and `--dry-run --review-weak` before adding missing video IDs.
+Back up your current library before cleanup. Record the playlist ID you intend
+to keep, and review the new playlists before retiring old copies or unliking tracks.
+
+New playlists are private by default. Existing playlists are found by name, and
+missing video IDs are appended. Ambiguous destination names require an explicit
+playlist ID through `copy_playlist`. Duplicate source playlist names receive a
+source-ID suffix so they remain separate.
+
+To copy one playlist, use the local ID printed during import:
+
+```powershell
+.\.venv\Scripts\python.exe -m spotify2ytmusic copy_playlist SOURCE_ID "+My Playlist" --algo 2
+```
+
+An existing YouTube playlist ID can replace `+My Playlist`. Re-running checks the
+full destination and adds missing recordings. Successful search results are cached
+in the report, but destination membership is always checked again. Source order is
+preserved on a fresh transfer. `--reverse-playlist` explicitly reverses it.
+
+At the end, the tool reads the destination again and checks that each chosen video
+ID is present. `added` counts acknowledged writes; `verified` counts source rows
+whose selected ID was found in the final destination. Missing IDs are recorded as
+`verification_failed`. Authentication/access failures stop the current transfer.
+
+Exit code **2** means unresolved tracks, failed writes, or incomplete verification.
+For playlist transfers, complete means every source row is verified and no failures
+or verification error remains. Dry runs report `planned` matches instead.
+
+Membership verification checks the selected video IDs, not audio fingerprints.
+Repeated occurrences of one recording are collapsed into one destination video ID,
+while all source occurrences remain in the report. Resuming fills membership gaps;
+existing ordering and any historical wrong matches need separate review.
+
+## 5. Transfer liked songs separately
+
+```powershell
+.\.venv\Scripts\python.exe -m spotify2ytmusic load_liked --dry-run --algo 2
+.\.venv\Scripts\python.exe -m spotify2ytmusic load_liked --algo 2 --track-sleep 1
+```
+
+`copy_all_playlists` excludes the synthetic liked-songs source. Saved-album tracks
+from a legacy JSON backup can be processed with `load_liked_albums`.
+
+## Resolve difficult tracks with exact IDs
+
+The default search (`--algo 2`) searches the public catalogue directly; it does not
+require a song to appear on an artist's main page:
+
+1. Search up to 50 song results using title and artist, with spelling correction disabled.
+2. Inspect tracks from up to five album results, validating the artist as well as the title.
+3. Try reordered, quoted, and album-qualified queries in songs, videos, and global search.
+   If those fallbacks do not find a suitable match, search by the exported recording
+   code (ISRC) when available and try YouTube Music's spelling correction. The same
+   metadata checks still apply to these results.
+4. Rank eligible results by album and duration. Reject conflicting artist/title,
+   recording version, duration, known explicit status, and known unavailability.
+
+Unicode case, accents, punctuation, and Arabic/Persian letter variants are normalized.
+Cosmetic video labels can be removed; recording labels such as live, remix,
+acoustic, and remastered are retained. A fan upload can match when its title contains
+both the artist and the track name. A same-title video alone is insufficient.
+
+Missing metadata, alternative spellings, different release labels, or ambiguous
+uploads may still require manual review. A search miss is not proof the song is absent.
+Use `--review-weak` on both preview and transfer to queue tied candidates and results
+without enough album, duration, artist-credit, or explicit-version evidence. Failed
+rows include a YouTube Music search link and available candidates for review.
+Use `search` and the report's candidate lists to investigate:
+
+```powershell
+.\.venv\Scripts\python.exe -m spotify2ytmusic search "Song Title" --artist "Artist" --album "Album" --algo 2
+```
+
+For a track you find yourself, create `matches.json` mapping its Spotify track ID
+(the report's `source_key`) to the 11-character YouTube video ID:
+
+```json
+{
+  "SPOTIFY_TRACK_ID": "YOUTUBE_ID1"
+}
+```
+
+Use the value after `v=` in the YouTube Music URL. For tracks without a Spotify ID,
+use the report's full `source_key` string as the JSON key. Then rerun:
+
+```powershell
+.\.venv\Scripts\python.exe -m spotify2ytmusic copy_all_playlists --algo 2 --overrides matches.json
+```
+
+Overrides take precedence over cached automatic matches and are checked for
+playability. They express your reviewed choice; no metadata rematching is applied.
+Delete/rename the report or choose another `--report` file to force fresh automatic
+searches. Known matches are shared across playlists to reduce API calls.
+
+`--algo 0` also checks title and artist. `--algo 1` additionally requires the album.
+Neither mode blindly accepts the first hit. These are intentional behavior changes
+from the upstream implementation.
+
+## Upstream review and remaining limits
+
+The cloned baseline is `d622655` (2025-03-13). Code review found empty-result crashes,
+unvalidated album artists, ignored CLI `--algo` arguments, false success counts,
+dry runs creating playlists, ineffective duplicate handling, broken test imports,
+and disabled CI tests. This checkout addresses those paths and enables regression tests.
+
+The original `spotify_backup.py` uses Spotify's deprecated implicit authorization
+flow and older playlist fields. Use Exportify for this workflow. Updating that
+legacy authorization flow and the GUI's thread handling is outside this change.
+The GUI can use the converted `playlists.json`, but the CLI exposes the complete
+preview/report/override workflow.
+
+YouTube's catalogue, regional availability, session expiry, throttling, and playlist
+capacity still apply. Requests retry transient failures a bounded number of times;
+failed additions remain visible. A catalogue search cannot guarantee identification
+of every recording without reviewing uncertain tracks. Live verification against
+your own archive remains necessary.
+
+## Tests
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q
+```
+
+Tests run offline and cover imports, matching, empty results, video/global fallbacks,
+wrong recordings, retries, reports, resumability, overrides, and destination checks.
 
 ## License
 
-Creative Commons Zero v1.0 Universal
-
-spotify-backup.py licensed under MIT License.
-See <https://github.com/caseychu/spotify-backup> for more information.
-
-[//]: # " vim: set tw=90 ts=4 sw=4 ai: "
+Creative Commons Zero v1.0 Universal. `spotify_backup.py` originates from
+[caseychu/spotify-backup](https://github.com/caseychu/spotify-backup) and is MIT licensed.

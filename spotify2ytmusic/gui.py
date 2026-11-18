@@ -244,7 +244,7 @@ class Window:
         auto_scroll.select()
 
         self.var_algo = tk.IntVar()
-        self.var_algo.set(0)
+        self.var_algo.set(2)
 
         self.algo_label = create_label(self.tab7, text=f"Algorithm: ")
         self.algo_label.pack(anchor=tk.CENTER, expand=True)
@@ -341,7 +341,7 @@ class Window:
         Args:
             action (int): 0 to load the settings, 1 to write the settings.
         """
-        texts = {0: "Exact match", 1: "Fuzzy match", 2: "Fuzzy match with videos"}
+        texts = {0: "Title and artist", 1: "Title, artist and album", 2: "Extended search with videos"}
 
         exist = True
         if action == 0:
