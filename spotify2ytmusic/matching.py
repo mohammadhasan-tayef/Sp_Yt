@@ -144,13 +144,14 @@ def rank_songs(
 ):
     expected = {normalize(credit) for credit in (source_artists or (artist,))} - {""}
     wanted_title, _ = _title_and_guests(title, expected)
+    wanted_album, _ = _title_and_guests(album, expected)
     wanted_artist = normalize(artist)
     ranked = []
     for song in songs:
         credits = {
             normalize(credit.get("name")) for credit in song.get("artists") or []
         }
-        candidate, query_title = song, title
+        candidate, query_title, query_album = song, title, album
         if review_weak:
             actual_title, guests = _title_and_guests(song.get("title"), expected)
             if (
@@ -163,8 +164,14 @@ def rank_songs(
             credits |= guests
             candidate = {**song, "title": actual_title}
             query_title = wanted_title
+            # Single releases sometimes include their track's guest credit in the album label.
+            release = (song.get("album") or {}).get("name")
+            actual_album, _ = _title_and_guests(release, expected)
+            if wanted_album == actual_album == wanted_title:
+                query_album = wanted_album
+                candidate["album"] = {"name": actual_album}
         score = candidate_score(
-            candidate, query_title, artist, album, duration_ms, explicit, strict_album
+            candidate, query_title, artist, query_album, duration_ms, explicit, strict_album
         )
         if score is None:
             continue
@@ -272,7 +279,8 @@ def lookup_song(
     selected = select()
     # Album lookup can distinguish same-title recordings and release variants.
     if selected and (
-        not album_name
+        review_weak
+        or not album_name
         or normalize((selected.get("album") or {}).get("name")) == normalize(album_name)
     ):
         return selected

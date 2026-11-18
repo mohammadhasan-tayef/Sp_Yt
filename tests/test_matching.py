@@ -314,3 +314,14 @@ def test_punctuation_only_release_titles_stay_distinct(album, matches):
     else:
         with pytest.raises(MatchNotFound):
             lookup_song(yt, "Survival", "Yes", "?", duration_ms=378000)
+
+
+def test_single_release_title_can_include_the_same_guest_credit():
+    yt = Mock()
+    exact = song(title="Survival (feat. Guest)", album={"name": "Survival"})
+    yt.search.return_value = [exact]
+    assert lookup_song(
+        yt, "Survival", "Yes", "Survival (feat. Guest)", duration_ms=378000,
+        explicit=False, source_artists=("Yes", "Guest"),
+    ) == exact
+    yt.search.assert_called_once()
