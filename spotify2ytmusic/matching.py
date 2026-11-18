@@ -5,6 +5,7 @@ import math
 import unicodedata
 from dataclasses import dataclass, field
 from typing import Optional
+from requests.exceptions import HTTPError
 from ytmusicapi.exceptions import YTMusicServerError
 
 
@@ -295,12 +296,22 @@ def lookup_song(
             if browse_id not in cache:
                 try:
                     cache[browse_id] = yt.get_album(browse_id)
-                except (KeyError, ValueError, YTMusicServerError) as error:
-                    if re.search(r"\b(?:401|403|429|5\d\d)\b", str(error)):
+                except (HTTPError, YTMusicServerError) as error:
+                    status = getattr(getattr(error, "response", None), "status_code", None)
+                    if status is None:
+                        match = re.search(r"\bHTTP (\d{3})\b", str(error))
+                        status = int(match[1]) if match else None
+                    if status not in (403, 404):
                         raise
-                    details.errors.append(str(error))
-                    continue
+                    # Album browse is supplementary. An individual release may
+                    # be inaccessible even while normal catalog search works.
+                    cache[browse_id] = None
+                except (KeyError, ValueError):
+                    cache[browse_id] = None
             data = cache[browse_id]
+            if data is None:
+                details.errors.append(f"Could not read album {browse_id}; continued searching")
+                continue
             collect(
                 [
                     {

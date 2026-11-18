@@ -1,6 +1,8 @@
 from unittest.mock import Mock
 
 import pytest
+from requests import Response
+from requests.exceptions import HTTPError
 from ytmusicapi.exceptions import YTMusicServerError
 
 from spotify2ytmusic.matching import MatchNotFound, candidate_score, lookup_song
@@ -168,6 +170,35 @@ def test_unbrowseable_album_does_not_block_video_fallback():
     yt.search.side_effect = search
     yt.get_album.side_effect = YTMusicServerError("Server returned HTTP 404")
     assert lookup_song(yt, "Survival", "Yes", "Yes", 2, review_weak=False) == video
+
+
+def test_forbidden_album_is_skipped_without_weakening_recording_checks():
+    yt = Mock()
+    exact = song()
+    def search(**kwargs):
+        if kwargs["filter"] == "albums":
+            return [{"browseId": "unavailable-release"}]
+        if kwargs["query"] == '"Survival" "Yes"':
+            return [song(artist="Wrong Artist", videoId="unrelated01"), exact]
+        return []
+    yt.search.side_effect = search
+    response = Response()
+    response.status_code = 403
+    yt.get_album.side_effect = HTTPError("YouTube Music returned HTTP 403", response=response)
+    album_cache = {}
+    for _ in range(2):
+        assert lookup_song(yt, "Survival", "Yes", "Yes", album_cache=album_cache) == exact
+    yt.get_album.assert_called_once_with("unavailable-release")
+
+
+def test_forbidden_song_search_is_still_reported_as_an_access_error():
+    yt = Mock()
+    response = Response()
+    response.status_code = 403
+    yt.search.side_effect = HTTPError("YouTube Music returned HTTP 403", response=response)
+    with pytest.raises(HTTPError):
+        lookup_song(yt, "Survival", "Yes", "Yes")
+    yt.get_album.assert_not_called()
 
 
 def test_review_mode_withholds_tied_distinct_recordings():
