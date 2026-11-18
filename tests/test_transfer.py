@@ -477,6 +477,22 @@ def test_invalid_override_file_is_rejected(tmp_path):
         backend.load_overrides(source)
 
 
+def test_repair_does_not_readd_an_unavailable_recording_already_listed(yt, track, match, tmp_path):
+    yt.get_playlist.return_value["tracks"] = [{
+        "videoId": "existing001", "title": track.title,
+        "artists": [{"name": track.artist}], "album": {"name": track.album},
+        "duration_seconds": 200, "isExplicit": False, "isAvailable": False,
+    }]
+    report = tmp_path / "report.jsonl"
+    result = backend.copier(iter([track]), "destination", yt=yt, track_sleep=0,
+                            report_file=report, audit_existing=True)
+    assert result["failed"] == result["unverified_existing"] == 1
+    assert result["verified"] == result["added"] == 0
+    assert "already listed but unavailable" in rows(report)[0]["error"]
+    match.assert_not_called()
+    yt.add_playlist_items.assert_not_called()
+
+
 def test_rebuild_prefix_avoids_existing_unprefixed_destination(
     yt, monkeypatch, tmp_path
 ):

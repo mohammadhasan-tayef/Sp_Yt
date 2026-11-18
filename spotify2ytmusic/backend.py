@@ -357,6 +357,7 @@ def copier(
         existing = {t["videoId"] for t in playlist["tracks"] if t.get("videoId")}
     expected = {}
     seen = set()
+    listed_counts = Counter(t["videoId"] for t in destination_tracks if t.get("videoId"))
     existing_counts = Counter(
         t["videoId"] for t in destination_tracks
         if t.get("videoId") in existing and t.get("isAvailable") is not False
@@ -367,7 +368,7 @@ def copier(
     destination_index = {}
     if audit_existing:
         for item in destination_tracks:
-            if item.get("videoId") not in existing or item.get("isAvailable") is False:
+            if not item.get("videoId"):
                 continue
             name = item.get("title") or ""
             fields = [name, *re.split(r"\s+[-–—]\s+", name, maxsplit=1)]
@@ -415,8 +416,10 @@ def copier(
                     )
                 dst_track = None
                 if audit_existing and source_key not in overrides:
+                    candidates = destination_index.get(title_key(src_track.title), {})
+                    # Even an unavailable entry can establish that the recording is listed.
                     ranked = rank_songs(
-                        destination_index.get(title_key(src_track.title), {}).values(),
+                        ({**item, "isAvailable": True} for item in candidates.values()),
                         src_track.title,
                         src_track.artist,
                         src_track.album,
@@ -432,7 +435,7 @@ def copier(
                             "Several entries already in this playlist match equally well"
                         )
                     if ranked:
-                        dst_track = ranked[0][1]
+                        dst_track = candidates[ranked[0][1]["videoId"]]
                         row["resolution"] = "existing_track_metadata"
                 if source_key in overrides:
                     video_id = overrides[source_key]
@@ -485,6 +488,8 @@ def copier(
                     row["status"] = "already_present"
                     if video_id in existing:
                         covered_existing.add(video_id)
+                elif playlist_mode and listed_counts[video_id] > existing_counts[video_id]:
+                    raise ValueError("Recording is already listed but unavailable in this YouTube Music session")
                 elif dry_run:
                     row["status"] = "planned"
                 else:
@@ -499,7 +504,6 @@ def copier(
                             )
                             count = sum(
                                 t.get("videoId") == video_id
-                                and t.get("isAvailable") is not False
                                 for t in current["tracks"]
                             )
                             if count >= occurrence:
