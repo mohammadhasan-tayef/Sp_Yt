@@ -175,7 +175,10 @@ def _transfer_parser():
 
 
 def _check_result(result):
-    if result.get("failed") or result.get("verification_error"):
+    if (
+        result.get("failed") or result.get("verification_error")
+        or result.get("sequence_matches") is False
+    ):
         raise SystemExit(2)
 
 
@@ -286,11 +289,8 @@ def copy_all_playlists():
         existing_only=args.existing_only,
         **_copy_options(args),
     )
-    if any(
-        result.get("failed") or result.get("verification_error")
-        for result in results.values()
-    ):
-        raise SystemExit(2)
+    for result in results.values():
+        _check_result(result)
 
 
 def gui():

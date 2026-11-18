@@ -41,10 +41,12 @@ def rows(path):
     ]
 
 
-def test_resume_reads_entire_destination_and_skips_duplicates(
+def test_resume_reads_entire_destination_and_preserves_duplicate_occurrences(
     yt, track, match, tmp_path
 ):
-    yt.get_playlist.return_value["tracks"] = [{"videoId": "testvideo01"}]
+    yt.get_playlist.return_value["tracks"] = [
+        {"videoId": "testvideo01"}, {"videoId": "testvideo01"}
+    ]
     result = backend.copier(
         iter([track, track]),
         "destination",
@@ -60,6 +62,7 @@ def test_resume_reads_entire_destination_and_skips_duplicates(
         "failed": 0,
         "verified": 2,
         "verification_error": None,
+        "sequence_matches": True,
     }
     yt.add_playlist_items.assert_not_called()
     assert all(
@@ -67,6 +70,86 @@ def test_resume_reads_entire_destination_and_skips_duplicates(
         for c in yt.get_playlist.call_args_list
     )
     match.assert_called_once()
+
+
+def test_repeated_source_recordings_are_added_and_verified_separately(
+    yt, track, match, tmp_path
+):
+    destination = []
+    yt.get_playlist.side_effect = lambda **kw: {
+        "title": "Destination", "tracks": list(destination)
+    }
+
+    def add(**kwargs):
+        destination.append({"videoId": kwargs["videoIds"][0]})
+        return {"status": "STATUS_SUCCEEDED"}
+
+    yt.add_playlist_items.side_effect = add
+    result = backend.copier(
+        iter([track, track]), "destination", yt=yt,
+        track_sleep=0, report_file=tmp_path / "report.jsonl",
+    )
+    assert result["added"] == result["verified"] == 2
+    assert result["sequence_matches"] is True
+    assert yt.add_playlist_items.call_args_list == [
+        call(playlistId="destination", videoIds=["testvideo01"], duplicates=False),
+        call(playlistId="destination", videoIds=["testvideo01"], duplicates=True),
+    ]
+
+
+def test_missing_duplicate_is_not_counted_as_verified(yt, track, match, tmp_path):
+    yt.get_playlist.side_effect = [
+        {"title": "Destination", "tracks": []},
+        {"title": "Destination", "tracks": [{"videoId": "testvideo01"}]},
+    ]
+    result = backend.copier(
+        iter([track, track]), "destination", yt=yt,
+        track_sleep=0, report_file=tmp_path / "report.jsonl",
+    )
+    assert result["verified"] == result["failed"] == 1
+    assert result["sequence_matches"] is False
+
+
+def test_lost_duplicate_add_response_is_reconciled_before_retry(
+    yt, track, match, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(backend.time, "sleep", lambda _: None)
+    destination = [{"videoId": "testvideo01"}]
+    yt.get_playlist.side_effect = lambda **kw: {
+        "title": "Destination", "tracks": list(destination)
+    }
+
+    def add(**kwargs):
+        destination.append({"videoId": kwargs["videoIds"][0]})
+        raise Timeout("response lost after successful write")
+
+    yt.add_playlist_items.side_effect = add
+    result = backend.copier(
+        iter([track, track]), "destination", yt=yt,
+        track_sleep=0, report_file=tmp_path / "report.jsonl",
+    )
+    assert result["verified"] == 2
+    assert result["failed"] == 0
+    assert len(destination) == 2
+    yt.add_playlist_items.assert_called_once()
+
+
+@pytest.mark.parametrize("destination", [
+    ["testvideo01", "unrelated01"], ["unrelated01", "testvideo01"],
+])
+def test_extra_or_out_of_order_entries_prevent_exact_transfer_success(
+    yt, track, match, tmp_path, destination
+):
+    yt.get_playlist.return_value["tracks"] = [{"videoId": vid} for vid in destination]
+    result = backend.copier(
+        iter([track]), "destination", yt=yt,
+        track_sleep=0, report_file=tmp_path / "report.jsonl",
+    )
+    assert result["verified"] == 1
+    assert result["sequence_matches"] is False
+    with pytest.raises(SystemExit):
+        cli._check_result(result)
+    yt.remove_playlist_items.assert_not_called()
 
 
 def test_successful_add_is_verified(yt, track, match, tmp_path):
@@ -213,6 +296,16 @@ def test_old_matching_policy_cache_is_not_reused(yt, track, match, tmp_path):
 
 def test_cli_enables_strict_review_by_default():
     assert cli._transfer_parser().parse_args([]).review_weak is True
+
+
+def test_batch_cli_fails_when_playlist_sequence_differs(monkeypatch):
+    monkeypatch.setattr("sys.argv", ["copy_all_playlists"])
+    monkeypatch.setattr(backend, "copy_all_playlists", lambda **kw: {
+        "source": {"failed": 0, "verified": 2, "sequence_matches": False}
+    })
+    with pytest.raises(SystemExit) as error:
+        cli.copy_all_playlists()
+    assert error.value.code == 2
 
 
 def test_unplayable_override_is_reported(yt, track, match, tmp_path):
@@ -401,7 +494,9 @@ def test_rebuild_prefix_avoids_existing_unprefixed_destination(
         playlist_prefix="Spotify - ", report_file=tmp_path / "report.jsonl"
     )
     assert yt.create_playlist.call_args.kwargs["title"] == "Spotify - Old Name"
-    yt.get_playlist.assert_called_once_with(playlistId="new", limit=None)
+    assert yt.get_playlist.call_args_list == [
+        call(playlistId="new", limit=None), call(playlistId="new", limit=None)
+    ]
 
 
 def test_existing_only_repair_requires_the_source_album_and_reports_old_entries(
@@ -490,5 +585,40 @@ def test_existing_only_batch_reports_missing_destination_without_creating(
     )
     assert results["source"]["failed"] == 0
     assert "exact playlist ID" in results["missing"]["error"]
-    yt.get_playlist.assert_called_once_with(playlistId="old", limit=None)
+    assert yt.get_playlist.call_args_list == [
+        call(playlistId="old", limit=None), call(playlistId="old", limit=None)
+    ]
+
+
+def test_preview_of_new_playlist_preserves_duplicate_rows(yt, monkeypatch, tmp_path):
+    monkeypatch.setattr(backend, "get_ytmusic", lambda: yt)
+    song = backend.SongInfo("Track", "Artist", "Album")
+    monkeypatch.setattr(backend, "iter_spotify_playlist", lambda *a, **kw: iter([song, song]))
+    yt.search.return_value = [{
+        "videoId": "testvideo01", "title": "Track",
+        "artists": [{"name": "Artist"}], "album": {"name": "Album"},
+    }]
+    result = backend.copy_playlist(
+        "liked-songs", "+New playlist", dry_run=True, track_sleep=0,
+        report_file=tmp_path / "report.jsonl",
+    )
+    assert result["planned"] == 2
+    assert result["already_present"] == 0
+    yt.create_playlist.assert_not_called()
+
+
+def test_same_membership_in_wrong_order_does_not_pass(yt, track, match, tmp_path):
+    second = track._replace(title="Second", spotify_id="second")
+    second_match = {**match.return_value, "title": "Second", "videoId": "second00001"}
+    first_match = match.return_value
+    match.side_effect = [first_match, second_match]
+    yt.get_playlist.return_value["tracks"] = [second_match, first_match]
+    result = backend.copier(
+        iter([track, second]), "destination", yt=yt,
+        track_sleep=0, report_file=tmp_path / "report.jsonl",
+    )
+    assert result["verified"] == 2
+    assert result["sequence_matches"] is False
+    with pytest.raises(SystemExit):
+        cli._check_result(result)
     yt.create_playlist.assert_not_called()

@@ -146,19 +146,25 @@ full destination and adds missing recordings. Successful search results are cach
 in the report, but destination membership is always checked again. Source order is
 preserved on a fresh transfer. `--reverse-playlist` explicitly reverses it.
 
-At the end, the tool reads the destination again and checks that each chosen video
-ID is present. `added` counts acknowledged writes; `verified` counts source rows
-whose selected ID was found in the final destination. Missing IDs are recorded as
-`verification_failed`. Authentication/access failures stop the current transfer.
+At the end, the tool reads the destination again and checks each chosen video's
+occurrence count. `added` counts confirmed or reconciled writes; `verified` counts
+source occurrences found in the final destination. Missing occurrences are recorded
+as `verification_failed`. Lost addition responses are reconciled before retrying so
+repeated source songs do not cause accidental extra copies. Authentication/access
+failures stop the current transfer.
 
 Exit code **2** means unresolved tracks, failed writes, or incomplete verification.
-For playlist transfers, complete means every source row is verified and no failures
-or verification error remains. Dry runs report `planned` matches instead.
+For playlist transfers, complete means every source row is verified, the full video
+sequence matches the source (including repetitions), and no failures or verification
+error remain. `sequence_matches: false` also produces exit code 2. Dry runs report
+`planned` source occurrences instead.
 
-Membership verification checks the selected video IDs, not audio fingerprints.
-Repeated occurrences of one recording are collapsed into one destination video ID,
-while all source occurrences remain in the report. Resuming fills membership gaps;
-existing ordering and any historical wrong matches need separate review.
+Verification checks selected video IDs and order, not audio fingerprints. Regular
+playlists retain repeated source recordings. Built-in likes remain a set.
+Resuming fills missing occurrences; existing extra songs or ordering differences
+are reported as an incomplete exact transfer. Existing songs are never automatically
+deleted or reordered. A fresh private destination is preferable when a previous
+transfer contains incorrect entries.
 
 ## 5. Transfer liked songs separately
 

@@ -5,6 +5,7 @@ import sys
 import os
 import time
 import re
+from collections import Counter
 from pathlib import Path
 from urllib.parse import urlencode
 from uuid import uuid4
@@ -312,6 +313,7 @@ def copier(
     source_playlist_id=None,
     review_weak=True,
     audit_existing=False,
+    playlist_mode=False,
 ):
     """Copy, checkpoint every source row, and verify destination membership.
 
@@ -321,6 +323,7 @@ def copier(
     if track_sleep < 0:
         raise ValueError("track_sleep must be non-negative")
     yt = yt if yt is not None else get_ytmusic()
+    playlist_mode = playlist_mode or dst_pl_id is not None
     match_cache = (
         match_cache if match_cache is not None else _load_match_cache(report_file)
     )
@@ -354,6 +357,12 @@ def copier(
         existing = {t["videoId"] for t in playlist["tracks"] if t.get("videoId")}
     expected = {}
     seen = set()
+    existing_counts = Counter(
+        t["videoId"] for t in destination_tracks
+        if t.get("videoId") in existing and t.get("isAvailable") is not False
+    )
+    source_counts = Counter()
+    source_sequence = []
     covered_existing = set()
     destination_index = {}
     if audit_existing:
@@ -464,22 +473,45 @@ def copier(
                 if not row.get("manual_override") and not row.get("resolution"):
                     row["cache_key"] = cache_key
                 print(f"  Youtube: {dst_track.get('title')} ({video_id})")
-                if video_id in existing or video_id in seen:
+                source_counts[video_id] += 1
+                source_sequence.append(video_id)
+                occurrence = source_counts[video_id]
+                already_present = (
+                    existing_counts[video_id] >= occurrence
+                    if playlist_mode
+                    else video_id in existing or video_id in seen
+                )
+                if already_present:
                     row["status"] = "already_present"
                     if video_id in existing:
                         covered_existing.add(video_id)
                 elif dry_run:
                     row["status"] = "planned"
                 else:
+                    attempted = False
 
                     def add():
+                        nonlocal attempted
+                        # Duplicate writes are not idempotent after a lost response.
+                        if attempted and dst_pl_id is not None:
+                            current = _retry(
+                                lambda: yt.get_playlist(playlistId=dst_pl_id, limit=None)
+                            )
+                            count = sum(
+                                t.get("videoId") == video_id
+                                and t.get("isAvailable") is not False
+                                for t in current["tracks"]
+                            )
+                            if count >= occurrence:
+                                return
+                        attempted = True
                         if dst_pl_id is None:
                             response = yt.rate_song(video_id, "LIKE")
                         else:
                             response = yt.add_playlist_items(
                                 playlistId=dst_pl_id,
                                 videoIds=[video_id],
-                                duplicates=False,
+                                duplicates=occurrence > 1,
                             )
                         status = (
                             response.get("status")
@@ -499,6 +531,9 @@ def copier(
 
                     _retry(add)
                     row["status"] = "added"
+                    existing_counts[video_id] = max(
+                        existing_counts[video_id], occurrence
+                    )
                 seen.add(video_id)
                 if not dry_run:
                     expected.setdefault(video_id, []).append(source_key)
@@ -550,7 +585,7 @@ def copier(
                 record({"status": "destination_review", "track": track})
             print(f"Existing destination entries for review: {len(unverified)}")
 
-        if not dry_run and expected:
+        if not dry_run and (expected or dst_pl_id is not None):
             try:
                 if dst_pl_id is not None:
                     destination = _retry(
@@ -558,22 +593,39 @@ def copier(
                     )
                 else:
                     destination = _retry(lambda: yt.get_liked_songs(limit=None))
-                present = {
+                present = Counter(
                     t["videoId"]
                     for t in destination["tracks"]
                     if t.get("videoId") and t.get("isAvailable") is not False
-                }
-                missing = set(expected) - present
-                summary["verified"] = sum(
-                    len(keys) for vid, keys in expected.items() if vid in present
                 )
+                if dst_pl_id is None:
+                    # Built-in likes are a set; regular playlists retain repetitions.
+                    present = Counter({vid: len(expected.get(vid, [])) for vid in present})
+                missing = Counter({vid: len(keys) for vid, keys in expected.items()}) - present
+                summary["verified"] = sum(
+                    min(len(keys), present[vid]) for vid, keys in expected.items()
+                )
+                if dst_pl_id is not None:
+                    summary["sequence_matches"] = (
+                        len(source_sequence) == summary["total"]
+                        and [t.get("videoId") for t in destination["tracks"]] == source_sequence
+                        and all(t.get("isAvailable") is not False for t in destination["tracks"])
+                    )
+                    if not summary["sequence_matches"]:
+                        record({
+                            "status": "sequence_verification_failed",
+                            "expected_video_ids": source_sequence,
+                            "actual_video_ids": [t.get("videoId") for t in destination["tracks"]],
+                        })
+                        print("ERROR: Destination songs, repetitions, or order differ from the source")
                 for video_id in sorted(missing):
-                    summary["failed"] += len(expected[video_id])
+                    summary["failed"] += missing[video_id]
                     record(
                         {
                             "status": "verification_failed",
                             "videoId": video_id,
-                            "source_keys": expected[video_id],
+                            "source_keys": expected[video_id][-missing[video_id]:],
+                            "missing_occurrences": missing[video_id],
                         }
                     )
             except Exception as error:
@@ -662,6 +714,7 @@ def copy_playlist(
         source_playlist_id=spotify_playlist_id,
         review_weak=review_weak or existing_only,
         audit_existing=existing_only,
+        playlist_mode=True,
     )
 
 
