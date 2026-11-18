@@ -54,7 +54,7 @@ def _http_status(error):
     return status
 
 
-def _retry(operation, attempts=4):
+def _retry(operation, attempts=4, *, read_only=False):
     """Retry transient failures, but fail authentication and invalid requests promptly."""
     for attempt in range(attempts):
         try:
@@ -66,9 +66,12 @@ def _retry(operation, attempts=4):
                 or status == 429
                 or (status and status >= 500)
             )
-            if not transient or attempt == attempts - 1:
+            # A browse/search request can occasionally return a single 403 and
+            # succeed moments later. Recheck once without repeating any write.
+            recheck_read = read_only and status == 403 and attempt == 0
+            if not (transient or recheck_read) or attempt == attempts - 1:
                 raise
-            delay = min(2**attempt * 2, 30)
+            delay = 12 if recheck_read else min(2**attempt * 2, 30)
             headers = getattr(getattr(error, "response", None), "headers", {})
             try:
                 delay = max(delay, float(headers.get("Retry-After", 0)))
@@ -254,7 +257,7 @@ def get_playlist_id_by_name(
     #  https://github.com/sigma67/ytmusicapi/issues/539
     try:
         if playlists is None:
-            playlists = _retry(lambda: yt.get_library_playlists(limit=None))
+            playlists = _retry(lambda: yt.get_library_playlists(limit=None), read_only=True)
     except KeyError as e:
         print("=" * 60)
         print(f"Attempting to look up playlist '{title}' failed with KeyError: {e}")
@@ -364,7 +367,7 @@ def copier(
     existing = set()
     destination_tracks = []
     if dst_pl_id is not None:
-        playlist = _retry(lambda: yt.get_playlist(playlistId=dst_pl_id, limit=None))
+        playlist = _retry(lambda: yt.get_playlist(playlistId=dst_pl_id, limit=None), read_only=True)
         destination_tracks = playlist["tracks"]
         existing = {
             t["videoId"]
@@ -375,7 +378,7 @@ def copier(
             f"== Youtube Playlist: {playlist['title']} ({len(existing)} unique tracks)"
         )
     elif not dry_run:
-        playlist = _retry(lambda: yt.get_liked_songs(limit=None))
+        playlist = _retry(lambda: yt.get_liked_songs(limit=None), read_only=True)
         existing = {t["videoId"] for t in playlist["tracks"] if t.get("videoId")}
     expected = {}
     seen = set()
@@ -461,7 +464,7 @@ def copier(
                         row["resolution"] = "existing_track_metadata"
                 if source_key in overrides:
                     video_id = overrides[source_key]
-                    song = _retry(lambda: yt.get_song(video_id))
+                    song = _retry(lambda: yt.get_song(video_id), read_only=True)
                     if song.get("playabilityStatus", {}).get("status") != "OK":
                         raise ValueError(f"Override {video_id} is not playable")
                     dst_track = {"videoId": video_id, **song["videoDetails"]}
@@ -489,7 +492,8 @@ def copier(
                             review_weak=review_weak,
                             album_cache=album_cache,
                             isrc=src_track.isrc,
-                        )
+                        ),
+                        read_only=True,
                     )
                     match_cache[cache_key] = dst_track
                 row["queries"] = details.queries
@@ -522,7 +526,8 @@ def copier(
                         # Duplicate writes are not idempotent after a lost response.
                         if attempted and dst_pl_id is not None:
                             current = _retry(
-                                lambda: yt.get_playlist(playlistId=dst_pl_id, limit=None)
+                                lambda: yt.get_playlist(playlistId=dst_pl_id, limit=None),
+                                read_only=True,
                             )
                             count = sum(
                                 t.get("videoId") == video_id
@@ -615,10 +620,11 @@ def copier(
             try:
                 if dst_pl_id is not None:
                     destination = _retry(
-                        lambda: yt.get_playlist(playlistId=dst_pl_id, limit=None)
+                        lambda: yt.get_playlist(playlistId=dst_pl_id, limit=None),
+                        read_only=True,
                     )
                 else:
-                    destination = _retry(lambda: yt.get_liked_songs(limit=None))
+                    destination = _retry(lambda: yt.get_liked_songs(limit=None), read_only=True)
                 present = Counter(
                     t["videoId"]
                     for t in destination["tracks"]
@@ -765,7 +771,7 @@ def copy_all_playlists(
     """Copy playlists with shared search caches and per-playlist reconciliation."""
     spotify_pls = load_playlists_json(spotify_playlist_file, spotify_playlists_encoding)
     yt = get_ytmusic()
-    destination_playlists = _retry(lambda: yt.get_library_playlists(limit=None))
+    destination_playlists = _retry(lambda: yt.get_library_playlists(limit=None), read_only=True)
     match_cache = _load_match_cache(report_file)
     album_cache = {}
     results = {}

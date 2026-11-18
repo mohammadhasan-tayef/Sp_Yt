@@ -351,6 +351,25 @@ def test_retry_is_bounded_and_auth_errors_are_not_retried(monkeypatch):
     assert failing.call_count == 1
 
 
+def test_forbidden_is_rechecked_once_only_for_reads(monkeypatch):
+    sleep = Mock()
+    monkeypatch.setattr(backend.time, "sleep", sleep)
+    response = Response()
+    response.status_code = 403
+    error = HTTPError("Forbidden", response=response)
+    temporary = Mock(side_effect=[error, "recovered"])
+    assert backend._retry(temporary, read_only=True) == "recovered"
+    sleep.assert_called_once_with(12)
+    denied = Mock(side_effect=error)
+    with pytest.raises(HTTPError):
+        backend._retry(denied, read_only=True)
+    assert denied.call_count == 2
+    denied.reset_mock()
+    with pytest.raises(HTTPError):
+        backend._retry(denied)
+    denied.assert_called_once()
+
+
 def test_rate_limit_respects_retry_after(monkeypatch):
     sleep = Mock()
     monkeypatch.setattr(backend.time, "sleep", sleep)
