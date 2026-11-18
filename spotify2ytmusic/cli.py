@@ -240,6 +240,7 @@ def load_liked():
             overrides=backend.load_overrides(args.overrides),
             source_playlist_id="liked-songs",
             review_weak=args.review_weak,
+            audit_existing=True,
             catalog=backend.get_public_catalog() if args.public_catalog else None,
         )
     )

@@ -377,9 +377,14 @@ def copier(
         print(
             f"== Youtube Playlist: {playlist['title']} ({len(existing)} unique tracks)"
         )
-    elif not dry_run:
+    elif not playlist_mode and (not dry_run or audit_existing):
         playlist = _retry(lambda: yt.get_liked_songs(limit=None), read_only=True)
-        existing = {t["videoId"] for t in playlist["tracks"] if t.get("videoId")}
+        destination_tracks = playlist["tracks"]
+        existing = {
+            t["videoId"] for t in destination_tracks
+            if t.get("videoId") and t.get("isAvailable") is not False
+        }
+        print(f"== Youtube Liked Music: {len(existing)} available unique tracks")
     expected = {}
     seen = set()
     listed_counts = Counter(t["videoId"] for t in destination_tracks if t.get("videoId"))
@@ -514,7 +519,7 @@ def copier(
                     row["status"] = "already_present"
                     if video_id in existing:
                         covered_existing.add(video_id)
-                elif playlist_mode and listed_counts[video_id] > existing_counts[video_id]:
+                elif listed_counts[video_id] > existing_counts[video_id]:
                     raise ValueError("Recording is already listed but unavailable in this YouTube Music session")
                 elif dry_run:
                     row["status"] = "planned"
