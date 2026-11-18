@@ -511,6 +511,19 @@ def test_liked_preview_audits_existing_recording_without_catalog_or_rating(yt, t
     yt.rate_song.assert_not_called()
 
 
+def test_local_match_does_not_wait_between_tracks(yt, track, match, monkeypatch, tmp_path):
+    yt.get_liked_songs.return_value = {"tracks": [{
+        "videoId": "existing001", "title": track.title,
+        "artists": [{"name": track.artist}], "album": {"name": track.album},
+        "duration_seconds": 200, "isExplicit": False, "isAvailable": True,
+    }]}
+    sleep = Mock()
+    monkeypatch.setattr(backend.time, "sleep", sleep)
+    backend.copier(iter([track]), yt=yt, dry_run=True, audit_existing=True,
+                   track_sleep=1, report_file=tmp_path / "report.jsonl")
+    sleep.assert_not_called()
+
+
 def test_public_catalog_does_not_handle_account_requests(yt, track, match, tmp_path):
     public = Mock()
     result = backend.copier(iter([track]), "destination", yt=yt, catalog=public,

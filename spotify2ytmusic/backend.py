@@ -436,6 +436,7 @@ def copier(
                 "match_policy": MATCH_POLICY,
             }
             details = ResearchDetails()
+            used_api = False
             print(
                 f"Spotify: {src_track.title} - {src_track.artist} - {src_track.album}"
             )
@@ -469,6 +470,7 @@ def copier(
                         row["resolution"] = "existing_track_metadata"
                 if source_key in overrides:
                     video_id = overrides[source_key]
+                    used_api = True
                     song = _retry(lambda: yt.get_song(video_id), read_only=True)
                     if song.get("playabilityStatus", {}).get("status") != "OK":
                         raise ValueError(f"Override {video_id} is not playable")
@@ -483,6 +485,7 @@ def copier(
                     ):
                         dst_track = cached
                 if dst_track is None:
+                    used_api = True
                     dst_track = _retry(
                         lambda: lookup_song(
                             catalog,
@@ -524,6 +527,7 @@ def copier(
                 elif dry_run:
                     row["status"] = "planned"
                 else:
+                    used_api = True
                     attempted = False
 
                     def add():
@@ -606,7 +610,7 @@ def copier(
             record(row)
             if summary["verification_error"]:
                 break
-            if track_sleep:
+            if track_sleep and used_api:
                 time.sleep(track_sleep)
 
         if audit_existing:
