@@ -13,6 +13,7 @@ def song(title="Survival", artist="Yes", **fields):
         "artists": [{"name": artist}],
         "album": {"name": "Yes"},
         "duration_seconds": 378,
+        "isExplicit": False,
         **fields,
     }
 
@@ -68,7 +69,9 @@ def test_video_fallback_works_when_songs_are_empty():
         title="YES - Survival (Official Audio)", artist="Archive Channel", album=None
     )
     yt.search.side_effect = lambda **kw: [video] if kw["filter"] == "videos" else []
-    assert lookup_song(yt, "Survival", "Yes", "Yes", 2, duration_ms=378000) == video
+    assert lookup_song(
+        yt, "Survival", "Yes", "Yes", 2, duration_ms=378000, review_weak=False
+    ) == video
 
 
 def test_video_title_alone_does_not_identify_artist():
@@ -114,7 +117,7 @@ def test_no_album_candidate_can_have_missing_metadata():
     yt = Mock()
     track = song(album=None)
     yt.search.return_value = [track]
-    assert lookup_song(yt, "Survival", "Yes", None, 2) == track
+    assert lookup_song(yt, "Survival", "Yes", None, 2, review_weak=False) == track
 
 
 def test_query_variants_are_used():
@@ -122,7 +125,7 @@ def test_query_variants_are_used():
     yt.search.side_effect = lambda **kw: (
         [song()] if kw["query"] == '"Survival" "Yes"' else []
     )
-    assert lookup_song(yt, "Survival", "Yes", None, 2)["videoId"]
+    assert lookup_song(yt, "Survival", "Yes", None, 2, duration_ms=378000)["videoId"]
 
 
 def test_invalid_algorithm_is_rejected_before_network():
@@ -156,7 +159,7 @@ def test_unbrowseable_album_does_not_block_video_fallback():
 
     yt.search.side_effect = search
     yt.get_album.side_effect = YTMusicServerError("Server returned HTTP 404")
-    assert lookup_song(yt, "Survival", "Yes", "Yes", 2) == video
+    assert lookup_song(yt, "Survival", "Yes", "Yes", 2, review_weak=False) == video
 
 
 def test_review_mode_withholds_tied_distinct_recordings():
@@ -224,3 +227,44 @@ def test_recording_code_search_still_rejects_wrong_artist():
             isrc="USABC1234567",
         )
     assert {"query": "USABC1234567", "filter": "songs"} in error.value.details.queries
+
+
+@pytest.mark.parametrize(
+    "candidate",
+    [
+        song(album={"name": "Yes (Live)"}),
+        song(album=None),
+        song(duration_seconds=None),
+        song(duration_seconds=float("nan")),
+        song(duration_seconds="not a duration"),
+        song(duration_seconds=383),
+        song(isExplicit=None),
+        song(title="Yes - Survival (Official Audio)", artist="Fan Uploads"),
+        song(videoType="MUSIC_VIDEO_TYPE_OMV"),
+        song(artists=[{"name": "Yes"}, {"name": "Cover Band"}]),
+    ],
+)
+def test_default_matching_withholds_unverified_recordings(candidate):
+    yt = Mock()
+    yt.search.side_effect = lambda **kw: [candidate] if kw["filter"] != "albums" else []
+    with pytest.raises(MatchNotFound):
+        lookup_song(yt, "Survival", "Yes", "Yes", duration_ms=378000, explicit=False)
+
+
+def test_exact_album_cannot_hide_missing_featured_artist():
+    yt = Mock()
+    yt.search.side_effect = lambda **kw: [song()] if kw["filter"] != "albums" else []
+    with pytest.raises(MatchNotFound):
+        lookup_song(
+            yt, "Survival", "Yes", "Yes", duration_ms=378000,
+            source_artists=("Yes", "Guest"),
+        )
+
+
+def test_default_matching_withholds_ties():
+    yt = Mock()
+    yt.search.side_effect = lambda **kw: (
+        [song(), song(videoId="another0001")] if kw["filter"] != "albums" else []
+    )
+    with pytest.raises(MatchNotFound):
+        lookup_song(yt, "Survival", "Yes", "Yes", duration_ms=378000)

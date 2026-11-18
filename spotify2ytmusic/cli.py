@@ -168,7 +168,8 @@ def _transfer_parser():
     parser.add_argument(
         "--review-weak",
         action="store_true",
-        help="Leave ambiguous or weak matches for manual review",
+        default=True,
+        help="Leave ambiguous or weak matches for manual review (always enabled by default)",
     )
     return parser
 

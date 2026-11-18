@@ -17,8 +17,7 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e .
 ```
 
-The virtual environment is already installed in this workspace. Calling its Python
-directly avoids PowerShell activation-policy problems. On Linux/macOS use
+Calling the virtual environment's Python directly avoids PowerShell activation-policy problems. On Linux/macOS use
 `.venv/bin/python` in place of `.\.venv\Scripts\python.exe`.
 
 ## 1. Import your fresh Exportify export
@@ -182,19 +181,27 @@ require a song to appear on an artist's main page:
    If those fallbacks do not find a suitable match, search by the exported recording
    code (ISRC) when available and try YouTube Music's spelling correction. The same
    metadata checks still apply to these results.
-4. Rank eligible results by album and duration. Reject conflicting artist/title,
-   recording version, duration, known explicit status, and known unavailability.
+4. Strict review is enabled by default in every transfer entry point. Require
+   matching title and all artist credits, the source album when supplied, duration
+   within three seconds when supplied, and confirmation of the source explicit flag
+   when supplied. Missing evidence, conflicting versions, music videos, fan-upload
+   artist claims, and equally ranked distinct IDs remain unresolved.
 
 Unicode case, accents, punctuation, and Arabic/Persian letter variants are normalized.
 Cosmetic video labels can be removed; recording labels such as live, remix,
-acoustic, and remastered are retained. A fan upload can match when its title contains
-both the artist and the track name. A same-title video alone is insufficient.
+acoustic, and remastered are retained. An artist named in a video's title is not
+accepted as an artist credit in strict review. A matching duration on another album
+is also insufficient: investigate release differences manually before overriding.
 
 Missing metadata, alternative spellings, different release labels, or ambiguous
 uploads may still require manual review. A search miss is not proof the song is absent.
-Use `--review-weak` on both preview and transfer to queue tied candidates and results
-without enough album, duration, artist-credit, or explicit-version evidence. Failed
+`--review-weak` remains accepted for compatibility; strict review is already the
+default. Failed
 rows include a YouTube Music search link and available candidates for review.
+Matches from reports produced before this stricter policy are searched again.
+Current cached matches are revalidated against source metadata before reuse.
+Metadata checks cannot establish audio identity; exact-looking metadata still needs
+listening or authoritative recording evidence when the recording is in doubt.
 Use `search` and the report's candidate lists to investigate:
 
 ```powershell

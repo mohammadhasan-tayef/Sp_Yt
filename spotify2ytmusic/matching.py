@@ -1,6 +1,7 @@
 """Conservative catalogue matching, including tracks published only as videos."""
 
 import re
+import math
 import unicodedata
 from dataclasses import dataclass, field
 from typing import Optional
@@ -29,17 +30,15 @@ def title_key(value, strip_decorations=False):
 
 
 def duration_seconds(song):
-    if song.get("duration_seconds") is not None:
-        return float(song["duration_seconds"])
-    duration = song.get("duration")
-    if not duration:
-        return None
     try:
-        seconds = 0
-        for part in duration.split(":"):
-            seconds = seconds * 60 + int(part)
-        return seconds
-    except (ValueError, AttributeError):
+        if song.get("duration_seconds") is not None:
+            seconds = float(song["duration_seconds"])
+        else:
+            seconds = 0
+            for part in song["duration"].split(":"):
+                seconds = seconds * 60 + int(part)
+        return seconds if math.isfinite(seconds) and seconds > 0 else None
+    except (KeyError, ValueError, TypeError, AttributeError, OverflowError):
         return None
 
 
@@ -115,7 +114,7 @@ def rank_songs(
     explicit=None,
     source_artists=(),
     strict_album=False,
-    review_weak=False,
+    review_weak=True,
 ):
     expected = {normalize(credit) for credit in (source_artists or (artist,))} - {""}
     ranked = []
@@ -132,19 +131,18 @@ def rank_songs(
         credited_count = len(expected & credits)
         explicit_confirmed = explicit is not None and song.get("isExplicit") == explicit
         if review_weak:
-            if explicit is True and not explicit_confirmed:
+            if explicit is not None and not explicit_confirmed:
                 continue
-            duration_close = (
-                duration_ms is not None and has_duration and duration_delta >= -3
-            )
-            album_supported = (
-                album_matches
-                and artist_credited
-                and (duration_ms is None or (has_duration and duration_delta >= -5))
-            )
-            if not (
-                album_supported or (duration_close and credited_count == len(expected))
-            ):
+            # A video title naming an artist does not establish who recorded it.
+            if not artist_credited or credits != expected:
+                continue
+            if album and not album_matches:
+                continue
+            if duration_ms is not None and not (has_duration and duration_delta >= -3):
+                continue
+            if not album and duration_ms is None:
+                continue
+            if song.get("videoType") not in (None, "MUSIC_VIDEO_TYPE_ATV"):
                 continue
         rank = (
             album_matches,
@@ -170,7 +168,7 @@ def lookup_song(
     explicit=None,
     album_cache=None,
     source_artists=(),
-    review_weak=False,
+    review_weak=True,
     isrc=None,
 ):
     """Search songs, albums and videos; never substitute on title alone.
@@ -198,6 +196,8 @@ def lookup_song(
                     "duration_seconds",
                     "isExplicit",
                     "isAvailable",
+                    "videoType",
+                    "resultType",
                 ):
                     if key in song and (
                         candidate.get(key) is None or candidate.get(key) == []

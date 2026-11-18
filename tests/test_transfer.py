@@ -24,7 +24,11 @@ def track():
 
 @pytest.fixture
 def match(monkeypatch):
-    lookup = Mock(return_value={"videoId": "testvideo01", "title": "Track"})
+    lookup = Mock(return_value={
+        "videoId": "testvideo01", "title": "Track",
+        "artists": [{"name": "Artist"}], "album": {"name": "Album"},
+        "duration_seconds": 200, "isExplicit": False,
+    })
     monkeypatch.setattr(backend, "lookup_song", lookup)
     return lookup
 
@@ -174,6 +178,41 @@ def test_manual_override_is_used_instead_of_search(yt, track, match, tmp_path):
     )
     match.assert_not_called()
     yt.get_song.assert_called_once_with("override001")
+
+
+def test_cached_match_is_revalidated_before_use(yt, track, match, tmp_path):
+    report = tmp_path / "report.jsonl"
+    backend.copier(
+        iter([track]), "destination", yt=yt, dry_run=True,
+        track_sleep=0, report_file=report,
+    )
+    cached = rows(report)[0]
+    cached["match"]["artists"] = [{"name": "Unrelated Artist"}]
+    report.write_text(json.dumps(cached), encoding="utf-8")
+    match.reset_mock()
+    backend.copier(
+        iter([track]), "destination", yt=yt, dry_run=True,
+        track_sleep=0, report_file=report,
+    )
+    match.assert_called_once()
+    assert rows(report)[1]["match"]["artists"] == [{"name": "Artist"}]
+
+
+def test_old_matching_policy_cache_is_not_reused(yt, track, match, tmp_path):
+    report = tmp_path / "report.jsonl"
+    old_key = json.dumps([2, True, track._asdict()], sort_keys=True)
+    report.write_text(json.dumps({
+        "cache_key": old_key, "match": match.return_value,
+    }), encoding="utf-8")
+    backend.copier(
+        iter([track]), "destination", yt=yt, dry_run=True,
+        track_sleep=0, report_file=report,
+    )
+    match.assert_called_once()
+
+
+def test_cli_enables_strict_review_by_default():
+    assert cli._transfer_parser().parse_args([]).review_weak is True
 
 
 def test_unplayable_override_is_reported(yt, track, match, tmp_path):
@@ -365,7 +404,7 @@ def test_rebuild_prefix_avoids_existing_unprefixed_destination(
     yt.get_playlist.assert_called_once_with(playlistId="new", limit=None)
 
 
-def test_existing_only_repair_skips_correct_alternate_upload_and_adds_missing_recording(
+def test_existing_only_repair_requires_the_source_album_and_reports_old_entries(
     yt, tmp_path
 ):
     present = {
@@ -389,7 +428,14 @@ def test_existing_only_repair_skips_correct_alternate_upload_and_adds_missing_re
         {"title": "Destination", "tracks": [present, wrong]},
         {"title": "Destination", "tracks": [present, wrong, correct]},
     ]
-    yt.search.return_value = [wrong, correct]
+    exact = {**present, "videoId": "exact000001", "album": {"name": "Album"}}
+    yt.search.side_effect = lambda **kw: (
+        [exact, wrong, correct] if kw["filter"] == "songs" else []
+    )
+    yt.get_playlist.side_effect = [
+        {"title": "Destination", "tracks": [present, wrong]},
+        {"title": "Destination", "tracks": [present, wrong, exact, correct]},
+    ]
     report = tmp_path / "report.jsonl"
     result = backend.copier(
         iter(
@@ -407,18 +453,19 @@ def test_existing_only_repair_skips_correct_alternate_upload_and_adds_missing_re
         review_weak=True,
         audit_existing=True,
     )
-    assert (result["already_present"], result["added"], result["verified"]) == (1, 1, 2)
-    yt.search.assert_called_once()
-    yt.add_playlist_items.assert_called_once_with(
-        playlistId="destination", videoIds=["correct0001"], duplicates=False
-    )
+    assert (result["already_present"], result["added"], result["verified"]) == (0, 2, 2)
+    assert yt.search.call_count == 2
+    assert yt.add_playlist_items.call_args_list == [
+        call(playlistId="destination", videoIds=["exact000001"], duplicates=False),
+        call(playlistId="destination", videoIds=["correct0001"], duplicates=False),
+    ]
     yt.remove_playlist_items.assert_not_called()
-    assert result["unverified_existing"] == 1
+    assert result["unverified_existing"] == 2
     assert [
         r["track"]["videoId"]
         for r in rows(report)
         if r["status"] == "destination_review"
-    ] == ["unrelated01"]
+    ] == ["existing001", "unrelated01"]
 
 
 def test_existing_only_batch_reports_missing_destination_without_creating(

@@ -14,6 +14,8 @@ from ytmusicapi import YTMusic
 from typing import Optional, Union, Iterator, Dict, NamedTuple
 from .matching import ResearchDetails, lookup_song, rank_songs, title_key
 
+MATCH_POLICY = "exact-metadata-v1"
+
 
 class SongInfo(NamedTuple):
     title: str
@@ -308,7 +310,7 @@ def copier(
     match_cache=None,
     album_cache=None,
     source_playlist_id=None,
-    review_weak=False,
+    review_weak=True,
     audit_existing=False,
 ):
     """Copy, checkpoint every source row, and verify destination membership.
@@ -384,12 +386,14 @@ def copier(
                 [src_track.title, src_track.artist, src_track.album], ensure_ascii=False
             )
             cache_key = json.dumps(
-                [yt_search_algo, review_weak, src_track._asdict()], sort_keys=True
+                [MATCH_POLICY, yt_search_algo, review_weak, src_track._asdict()],
+                sort_keys=True,
             )
             row = {
                 "index": index,
                 "source": src_track._asdict(),
                 "source_key": source_key,
+                "match_policy": MATCH_POLICY,
             }
             details = ResearchDetails()
             print(
@@ -429,8 +433,14 @@ def copier(
                     dst_track = {"videoId": video_id, **song["videoDetails"]}
                     row["manual_override"] = True
                 elif dst_track is None and cache_key in match_cache:
-                    dst_track = match_cache[cache_key]
-                elif dst_track is None:
+                    cached = match_cache[cache_key]
+                    if rank_songs(
+                        [cached], src_track.title, src_track.artist, src_track.album,
+                        src_track.duration_ms, src_track.explicit, src_track.artists,
+                        strict_album=yt_search_algo == 1, review_weak=review_weak,
+                    ):
+                        dst_track = cached
+                if dst_track is None:
                     dst_track = _retry(
                         lambda: lookup_song(
                             yt,
@@ -448,6 +458,7 @@ def copier(
                         )
                     )
                     match_cache[cache_key] = dst_track
+                row["queries"] = details.queries
                 video_id = dst_track["videoId"]
                 row["match"] = dst_track
                 if not row.get("manual_override") and not row.get("resolution"):
@@ -598,7 +609,7 @@ def copy_playlist(
     album_cache=None,
     spotify_data=None,
     destination_playlists=None,
-    review_weak=False,
+    review_weak=True,
     existing_only=False,
 ):
     """Copy one playlist; dry runs never create a destination playlist."""
@@ -666,7 +677,7 @@ def copy_all_playlists(
     report_file="transfer-report.jsonl",
     overrides=None,
     playlist_prefix="",
-    review_weak=False,
+    review_weak=True,
     existing_only=False,
 ):
     """Copy playlists with shared search caches and per-playlist reconciliation."""
