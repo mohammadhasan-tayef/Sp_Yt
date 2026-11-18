@@ -6,10 +6,12 @@ import os
 import time
 import re
 from collections import Counter
+from functools import partial
 from pathlib import Path
 from urllib.parse import urlencode
 from uuid import uuid4
-from requests.exceptions import ConnectionError, Timeout
+from requests import Session
+from requests.exceptions import ConnectionError, HTTPError, Timeout
 
 from ytmusicapi import YTMusic
 from typing import Optional, Union, Iterator, Dict, NamedTuple
@@ -76,6 +78,24 @@ def _retry(operation, attempts=4):
             time.sleep(delay)
 
 
+def _check_http_response(response, *args, **kwargs):
+    # ytmusicapi decodes JSON before checking status, which hides HTML errors.
+    content_type = response.headers.get("Content-Type", "").partition(";")[0].lower()
+    if response.status_code >= 400 and content_type != "application/json":
+        raise HTTPError(f"YouTube Music returned HTTP {response.status_code}", response=response)
+
+
+def _ytmusic_client(*args, **kwargs):
+    session = Session()
+    session.request = partial(session.request, timeout=30)
+    session.hooks["response"].append(_check_http_response)
+    return YTMusic(*args, requests_session=session, **kwargs)
+
+
+def get_public_catalog() -> YTMusic:
+    return _ytmusic_client()
+
+
 def get_ytmusic() -> YTMusic:
     """Load local browser headers or OAuth tokens with custom client credentials."""
     auth_file = os.environ.get("YTMUSIC_AUTH_FILE", "oauth.json")
@@ -96,13 +116,13 @@ def get_ytmusic() -> YTMusic:
                 "OAuth tokens require YTMUSIC_CLIENT_ID and YTMUSIC_CLIENT_SECRET; "
                 "browser-header authentication needs neither"
             )
-        return YTMusic(
+        return _ytmusic_client(
             auth_file,
             oauth_credentials=OAuthCredentials(
                 client_id=client_id, client_secret=client_secret
             ),
         )
-    return YTMusic(auth_file)
+    return _ytmusic_client(auth_file)
 
 
 def _ytmusic_create_playlist(
@@ -314,6 +334,7 @@ def copier(
     review_weak=True,
     audit_existing=False,
     playlist_mode=False,
+    catalog=None,
 ):
     """Copy, checkpoint every source row, and verify destination membership.
 
@@ -323,6 +344,7 @@ def copier(
     if track_sleep < 0:
         raise ValueError("track_sleep must be non-negative")
     yt = yt if yt is not None else get_ytmusic()
+    catalog = catalog if catalog is not None else yt
     playlist_mode = playlist_mode or dst_pl_id is not None
     match_cache = (
         match_cache if match_cache is not None else _load_match_cache(report_file)
@@ -455,7 +477,7 @@ def copier(
                 if dst_track is None:
                     dst_track = _retry(
                         lambda: lookup_song(
-                            yt,
+                            catalog,
                             src_track.title,
                             src_track.artist,
                             src_track.album,
@@ -667,6 +689,7 @@ def copy_playlist(
     destination_playlists=None,
     review_weak=True,
     existing_only=False,
+    catalog=None,
 ):
     """Copy one playlist; dry runs never create a destination playlist."""
     # Resolve and validate the source before making any destination changes.
@@ -719,6 +742,7 @@ def copy_playlist(
         review_weak=review_weak or existing_only,
         audit_existing=existing_only,
         playlist_mode=True,
+        catalog=catalog,
     )
 
 
@@ -736,6 +760,7 @@ def copy_all_playlists(
     playlist_prefix="",
     review_weak=True,
     existing_only=False,
+    catalog=None,
 ):
     """Copy playlists with shared search caches and per-playlist reconciliation."""
     spotify_pls = load_playlists_json(spotify_playlist_file, spotify_playlists_encoding)
@@ -769,6 +794,7 @@ def copy_all_playlists(
                 destination_playlists=destination_playlists,
                 review_weak=review_weak,
                 existing_only=existing_only,
+                catalog=catalog,
             )
             if _http_status(results[src_pl["id"]].get("verification_error", "")) in (
                 401,

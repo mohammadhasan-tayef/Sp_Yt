@@ -2,6 +2,8 @@ import json
 from unittest.mock import Mock
 
 import pytest
+from requests import Response
+from requests.exceptions import HTTPError
 
 from spotify2ytmusic import backend, ytmusic_credentials
 
@@ -22,7 +24,17 @@ def test_header_auth_loads_without_custom_oauth_client(monkeypatch, tmp_path):
     client = Mock()
     monkeypatch.setattr(backend, "YTMusic", client)
     backend.get_ytmusic()
-    client.assert_called_once_with(str(auth))
+    assert client.call_args.args == (str(auth),)
+    assert backend._check_http_response in client.call_args.kwargs["requests_session"].hooks["response"]
+
+
+def test_html_error_retains_http_status_without_exposing_body():
+    response = Response()
+    response.status_code = 403
+    response.headers["Content-Type"] = "text/html; charset=utf-8"
+    with pytest.raises(HTTPError, match="YouTube Music returned HTTP 403") as caught:
+        backend._check_http_response(response)
+    assert backend._http_status(caught.value) == 403
 
 
 def test_oauth_tokens_require_custom_client_configuration(monkeypatch, tmp_path):

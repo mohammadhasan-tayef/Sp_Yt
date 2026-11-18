@@ -166,6 +166,10 @@ def _transfer_parser():
         "--overrides", help="JSON mapping Spotify track IDs to YouTube video IDs"
     )
     parser.add_argument(
+        "--public-catalog", action="store_true",
+        help="Search the public catalog without sending account credentials",
+    )
+    parser.add_argument(
         "--review-weak",
         action="store_true",
         default=True,
@@ -194,6 +198,7 @@ def _copy_options(args):
         overrides=backend.load_overrides(args.overrides),
         privacy_status=args.privacy,
         review_weak=args.review_weak,
+        catalog=backend.get_public_catalog() if args.public_catalog else None,
     )
 
 
@@ -212,6 +217,7 @@ def load_liked_albums():
             overrides=backend.load_overrides(args.overrides),
             source_playlist_id="liked-albums",
             review_weak=args.review_weak,
+            catalog=backend.get_public_catalog() if args.public_catalog else None,
         )
     )
 
@@ -234,6 +240,7 @@ def load_liked():
             overrides=backend.load_overrides(args.overrides),
             source_playlist_id="liked-songs",
             review_weak=args.review_weak,
+            catalog=backend.get_public_catalog() if args.public_catalog else None,
         )
     )
 

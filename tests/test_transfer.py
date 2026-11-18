@@ -477,6 +477,16 @@ def test_invalid_override_file_is_rejected(tmp_path):
         backend.load_overrides(source)
 
 
+def test_public_catalog_does_not_handle_account_requests(yt, track, match, tmp_path):
+    public = Mock()
+    result = backend.copier(iter([track]), "destination", yt=yt, catalog=public,
+                            dry_run=True, track_sleep=0, report_file=tmp_path / "report.jsonl")
+    assert result["planned"] == 1
+    assert match.call_args.args[0] is public
+    yt.get_playlist.assert_called_once_with(playlistId="destination", limit=None)
+    public.get_playlist.assert_not_called()
+
+
 def test_repair_does_not_readd_an_unavailable_recording_already_listed(yt, track, match, tmp_path):
     yt.get_playlist.return_value["tracks"] = [{
         "videoId": "existing001", "title": track.title,
