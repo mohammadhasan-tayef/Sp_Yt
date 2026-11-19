@@ -414,11 +414,13 @@ def copier(
     catalog=None,
     no_duplicates=False,
     prefer_explicit=False,
+    destination_snapshot=None,
 ):
     """Copy, checkpoint every source row, and verify destination membership.
 
     Re-running reads the complete destination and adds only missing video IDs.
     The report is append-only so a cancelled transfer keeps its progress.
+    A caller that just read the complete destination can reuse that snapshot.
     """
     if track_sleep < 0:
         raise ValueError("track_sleep must be non-negative")
@@ -443,25 +445,19 @@ def copier(
     }
     existing = set()
     destination_tracks = []
-    if dst_pl_id is not None:
-        playlist = _destination_read(yt, dst_pl_id)
-        destination_tracks = playlist["tracks"]
-        existing = {
-            t["videoId"]
-            for t in destination_tracks
-            if t.get("videoId") and t.get("isAvailable") is not False
-        }
-        print(
-            f"== Youtube Playlist: {playlist['title']} ({len(existing)} unique tracks)"
+    if dst_pl_id is not None or (not playlist_mode and (not dry_run or audit_existing)):
+        playlist = (
+            destination_snapshot
+            if destination_snapshot is not None
+            else _destination_read(yt, dst_pl_id)
         )
-    elif not playlist_mode and (not dry_run or audit_existing):
-        playlist = _destination_read(yt, None)
         destination_tracks = playlist["tracks"]
         existing = {
             t["videoId"] for t in destination_tracks
             if t.get("videoId") and t.get("isAvailable") is not False
         }
-        print(f"== Youtube Liked Music: {len(existing)} available unique tracks")
+        label = f"Playlist: {playlist['title']}" if dst_pl_id is not None else "Liked Music"
+        print(f"== Youtube {label} ({len(existing)} available unique tracks)")
     expected = {}
     seen = set()
     listed_counts = Counter(t["videoId"] for t in destination_tracks if t.get("videoId"))

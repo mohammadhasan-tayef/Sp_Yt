@@ -72,6 +72,20 @@ def test_resume_reads_entire_destination_and_preserves_duplicate_occurrences(
     match.assert_called_once()
 
 
+def test_resume_reuses_a_fresh_snapshot_but_verifies_live_membership(yt, track, match, tmp_path):
+    snapshot = {"title": "Destination", "tracks": [{"videoId": "testvideo01"}]}
+    yt.get_playlist.return_value = snapshot
+
+    result = backend.copier(
+        iter([track]), "destination", yt=yt, no_duplicates=True,
+        destination_snapshot=snapshot, track_sleep=0, report_file=tmp_path / "report.jsonl",
+    )
+
+    assert result["already_present"] == result["verified"] == 1
+    yt.add_playlist_items.assert_not_called()
+    yt.get_playlist.assert_called_once_with(playlistId="destination", limit=None)
+
+
 def test_repeated_source_recordings_are_added_and_verified_separately(
     yt, track, match, tmp_path
 ):
