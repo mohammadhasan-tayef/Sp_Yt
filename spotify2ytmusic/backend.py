@@ -15,7 +15,7 @@ from requests.exceptions import ConnectionError, HTTPError, RequestException, Ti
 
 from ytmusicapi import YTMusic
 from typing import Optional, Union, Iterator, Dict, NamedTuple
-from .matching import ResearchDetails, lookup_song, rank_songs, title_key
+from .matching import ResearchDetails, TrafficCheckError, lookup_song, rank_songs, title_key
 
 MATCH_POLICY = "exact-metadata-v3"
 
@@ -76,6 +76,7 @@ def _retry(operation, attempts=4, *, read_only=False):
             recheck_read = (
                 read_only and status == 403 and attempt == 0
                 and not _proxy_denied_access(error)
+                and not isinstance(error, TrafficCheckError)
             )
             if not (transient or recheck_read) or attempt == attempts - 1:
                 raise
@@ -96,7 +97,8 @@ def _recovering_read(operation, probe, *, isolated_error=None):
     except Exception as original:
         if _http_status(original) != 403 or _proxy_denied_access(original):
             raise
-        for delay in (0, 45, 120, 300):
+        delays = (45, 120, 300) if isinstance(original, TrafficCheckError) else (0, 45, 120, 300)
+        for delay in delays:
             if delay:
                 print(f"Read access unavailable (HTTP 403). Checking again in {delay} seconds.")
                 time.sleep(delay)
@@ -107,8 +109,14 @@ def _recovering_read(operation, probe, *, isolated_error=None):
                     raise
                 continue
             if delay:
+                try:
+                    result = _retry(operation, read_only=True)
+                except TrafficCheckError as error:
+                    if _proxy_denied_access(error):
+                        raise
+                    continue
                 print("Read access recovered. Resuming the interrupted operation.")
-                return _retry(operation, read_only=True)
+                return result
             if isolated_error:
                 raise ValueError(isolated_error) from original
             break
@@ -142,7 +150,8 @@ def _check_http_response(response, *args, **kwargs):
         format_label = {"application/json": "json", "text/html": "html"}.get(content_type, "other")
         summary = f"endpoint={endpoint}, format={format_label}, signals={', '.join(signals) or 'none'}"
         print(f"YouTube Music HTTP 403: {summary}")
-        raise HTTPError(f"YouTube Music returned HTTP 403 ({summary})", response=response)
+        error_type = TrafficCheckError if "traffic check" in signals else HTTPError
+        raise error_type(f"YouTube Music returned HTTP 403 ({summary})", response=response)
     # ytmusicapi decodes JSON before checking status, which hides HTML errors.
     if response.status_code >= 400 and content_type != "application/json":
         raise HTTPError(f"YouTube Music returned HTTP {response.status_code}", response=response)

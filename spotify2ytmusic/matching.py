@@ -84,6 +84,10 @@ class MatchNotFound(ValueError):
         self.details = details
 
 
+class TrafficCheckError(HTTPError):
+    """YouTube asked the client to stop or verify automated traffic."""
+
+
 def _catalog_error_status(error):
     status = getattr(getattr(error, "response", None), "status_code", None)
     if status is not None:
@@ -271,7 +275,7 @@ def lookup_song(
                 query=query, filter=filter, limit=limit, ignore_spelling=ignore_spelling
             )
         except (HTTPError, YTMusicServerError) as error:
-            if required or _catalog_error_status(error) != 403:
+            if required or isinstance(error, TrafficCheckError) or _catalog_error_status(error) != 403:
                 raise
             details.errors.append("Supplementary catalog search returned HTTP 403")
             raise MatchNotFound("Supplementary catalog search was denied; track needs review", details) from None
@@ -322,7 +326,7 @@ def lookup_song(
                 try:
                     cache[browse_id] = yt.get_album(browse_id)
                 except (HTTPError, YTMusicServerError) as error:
-                    if _catalog_error_status(error) not in (403, 404):
+                    if isinstance(error, TrafficCheckError) or _catalog_error_status(error) not in (403, 404):
                         raise
                     # Album browse is supplementary. An individual release may
                     # be inaccessible even while normal catalog search works.

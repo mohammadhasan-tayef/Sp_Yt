@@ -430,6 +430,21 @@ def test_recovering_read_resumes_only_after_control_request_succeeds(monkeypatch
     assert sleep.call_args_list == [call(12), call(45), call(120)]
 
 
+def test_traffic_checks_pause_even_if_the_control_request_is_healthy(monkeypatch):
+    sleep = Mock()
+    monkeypatch.setattr(backend.time, "sleep", sleep)
+    response = Response()
+    response.status_code = 403
+    denied = backend.TrafficCheckError(response=response)
+    operation = Mock(side_effect=[denied, denied, "recovered"])
+    probe = Mock(return_value="reachable")
+
+    assert backend._recovering_read(operation, probe, isolated_error="defer") == "recovered"
+    assert operation.call_count == 3
+    assert probe.call_count == 2
+    assert sleep.call_args_list == [call(45), call(120)]
+
+
 def test_explicit_proxy_denial_does_not_retry_or_probe(monkeypatch):
     sleep = Mock()
     monkeypatch.setattr(backend.time, "sleep", sleep)

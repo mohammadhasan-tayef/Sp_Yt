@@ -5,7 +5,7 @@ from requests import Response
 from requests.exceptions import HTTPError
 from ytmusicapi.exceptions import YTMusicServerError
 
-from spotify2ytmusic.matching import MatchNotFound, candidate_score, lookup_song
+from spotify2ytmusic.matching import MatchNotFound, TrafficCheckError, candidate_score, lookup_song
 
 
 def song(title="Survival", artist="Yes", **fields):
@@ -27,6 +27,17 @@ def test_empty_results_are_reported_not_indexed(algorithm):
     with pytest.raises(MatchNotFound) as error:
         lookup_song(yt, "Survival", "Yes", "Yes", algorithm)
     assert error.value.details.queries
+
+
+def test_traffic_challenge_from_supplementary_search_reaches_transfer_recovery():
+    yt = Mock()
+    response = Response()
+    response.status_code = 403
+    error = TrafficCheckError(response=response)
+    yt.search.side_effect = [[], error]
+
+    with pytest.raises(TrafficCheckError):
+        lookup_song(yt, "Survival", "Yes", "Yes")
 
 
 @pytest.mark.parametrize(
