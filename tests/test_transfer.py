@@ -445,6 +445,25 @@ def test_traffic_checks_pause_even_if_the_control_request_is_healthy(monkeypatch
     assert sleep.call_args_list == [call(45), call(120)]
 
 
+@pytest.mark.parametrize("destination", [None, "destination"])
+def test_destination_recovery_probes_the_same_collection(yt, monkeypatch, destination):
+    sleep = Mock()
+    monkeypatch.setattr(backend.time, "sleep", sleep)
+    response = Response()
+    response.status_code = 403
+    denied = backend.TrafficCheckError(response=response)
+    read = yt.get_liked_songs if destination is None else yt.get_playlist
+    options = {} if destination is None else {"playlistId": destination}
+    read.side_effect = [denied, {"tracks": []}, {"tracks": ["restored"]}]
+
+    assert backend._destination_read(yt, destination) == {"tracks": ["restored"]}
+    assert read.call_args_list == [
+        call(limit=None, **options), call(limit=1, **options), call(limit=None, **options),
+    ]
+    yt.get_library_playlists.assert_not_called()
+    sleep.assert_called_once_with(45)
+
+
 def test_explicit_proxy_denial_does_not_retry_or_probe(monkeypatch):
     sleep = Mock()
     monkeypatch.setattr(backend.time, "sleep", sleep)

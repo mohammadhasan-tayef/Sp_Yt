@@ -127,6 +127,11 @@ def _account_read(yt, operation):
     return _recovering_read(operation, lambda: yt.get_library_playlists(limit=1))
 
 
+def _destination_read(yt, playlist_id):
+    read = yt.get_liked_songs if playlist_id is None else partial(yt.get_playlist, playlistId=playlist_id)
+    return _recovering_read(lambda: read(limit=None), lambda: read(limit=1))
+
+
 def _check_http_response(response, *args, **kwargs):
     content_type = response.headers.get("Content-Type", "").partition(";")[0].lower()
     if response.status_code == 403:
@@ -439,7 +444,7 @@ def copier(
     existing = set()
     destination_tracks = []
     if dst_pl_id is not None:
-        playlist = _account_read(yt, lambda: yt.get_playlist(playlistId=dst_pl_id, limit=None))
+        playlist = _destination_read(yt, dst_pl_id)
         destination_tracks = playlist["tracks"]
         existing = {
             t["videoId"]
@@ -450,7 +455,7 @@ def copier(
             f"== Youtube Playlist: {playlist['title']} ({len(existing)} unique tracks)"
         )
     elif not playlist_mode and (not dry_run or audit_existing):
-        playlist = _account_read(yt, lambda: yt.get_liked_songs(limit=None))
+        playlist = _destination_read(yt, None)
         destination_tracks = playlist["tracks"]
         existing = {
             t["videoId"] for t in destination_tracks
@@ -630,10 +635,7 @@ def copier(
                         nonlocal attempted
                         # Duplicate writes are not idempotent after a lost response.
                         if attempted and dst_pl_id is not None:
-                            current = _account_read(
-                                yt,
-                                lambda: yt.get_playlist(playlistId=dst_pl_id, limit=None),
-                            )
+                            current = _destination_read(yt, dst_pl_id)
                             count = sum(
                                 t.get("videoId") == video_id
                                 for t in current["tracks"]
@@ -728,13 +730,7 @@ def copier(
 
         if not dry_run and (expected or dst_pl_id is not None):
             try:
-                if dst_pl_id is not None:
-                    destination = _account_read(
-                        yt,
-                        lambda: yt.get_playlist(playlistId=dst_pl_id, limit=None),
-                    )
-                else:
-                    destination = _account_read(yt, lambda: yt.get_liked_songs(limit=None))
+                destination = _destination_read(yt, dst_pl_id)
                 present = Counter(
                     t["videoId"]
                     for t in destination["tracks"]
