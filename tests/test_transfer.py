@@ -446,6 +446,25 @@ def test_explicit_proxy_denial_does_not_retry_or_probe(monkeypatch):
     sleep.assert_not_called()
 
 
+def test_forbidden_diagnostics_preserve_signals_without_logging_private_values(capsys):
+    response = Response()
+    response.status_code = 403
+    response.url = "https://music.youtube.com/youtubei/v1/search?key=private-url-value"
+    response.headers["Content-Type"] = "application/json"
+    response.headers["X-Mitmproxy-Blocked-Reason"] = "private-header-value"
+    response._content = b'{"message":"unusual traffic","context":"private-body-value"}'
+
+    with pytest.raises(HTTPError) as error:
+        backend._check_http_response(response)
+
+    assert error.value.response is response
+    diagnostic = str(error.value) + capsys.readouterr().out
+    assert "endpoint=search" in diagnostic
+    assert "proxy block header" in diagnostic
+    assert "traffic check" in diagnostic
+    assert "private-" not in diagnostic
+
+
 def test_rate_limit_respects_retry_after(monkeypatch):
     sleep = Mock()
     monkeypatch.setattr(backend.time, "sleep", sleep)

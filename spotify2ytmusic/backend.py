@@ -8,10 +8,10 @@ import re
 from collections import Counter
 from functools import partial
 from pathlib import Path
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 from uuid import uuid4
 from requests import Session
-from requests.exceptions import ConnectionError, HTTPError, Timeout
+from requests.exceptions import ConnectionError, HTTPError, RequestException, Timeout
 
 from ytmusicapi import YTMusic
 from typing import Optional, Union, Iterator, Dict, NamedTuple
@@ -120,8 +120,30 @@ def _account_read(yt, operation):
 
 
 def _check_http_response(response, *args, **kwargs):
-    # ytmusicapi decodes JSON before checking status, which hides HTML errors.
     content_type = response.headers.get("Content-Type", "").partition(";")[0].lower()
+    if response.status_code == 403:
+        endpoint = urlsplit(response.url or "").path.strip("/").removeprefix("youtubei/v1/")
+        if endpoint not in {"browse", "search", "player", "next", "browse/edit_playlist", "like/like"}:
+            endpoint = "other"
+        try:
+            body = (response.content or b"")[:12000].decode("utf-8", errors="replace").casefold()
+        except RequestException:
+            body = ""
+        signals = []
+        if "X-Mitmproxy-Blocked-Reason" in response.headers:
+            signals.append("proxy block header")
+        if "Retry-After" in response.headers:
+            signals.append("retry-after header")
+        if any(marker in body for marker in ("unusual traffic", "automated queries", "verify you are human")):
+            signals.append("traffic check")
+        if any(marker in body for marker in ("not available in your country", "not available in your region")):
+            signals.append("region restriction")
+        # Emit only recognized labels. The full URL and response can contain account data.
+        format_label = {"application/json": "json", "text/html": "html"}.get(content_type, "other")
+        summary = f"endpoint={endpoint}, format={format_label}, signals={', '.join(signals) or 'none'}"
+        print(f"YouTube Music HTTP 403: {summary}")
+        raise HTTPError(f"YouTube Music returned HTTP 403 ({summary})", response=response)
+    # ytmusicapi decodes JSON before checking status, which hides HTML errors.
     if response.status_code >= 400 and content_type != "application/json":
         raise HTTPError(f"YouTube Music returned HTTP {response.status_code}", response=response)
 
