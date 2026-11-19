@@ -416,6 +416,36 @@ def test_forbidden_is_rechecked_once_only_for_reads(monkeypatch):
     denied.assert_called_once()
 
 
+def test_recovering_read_resumes_only_after_control_request_succeeds(monkeypatch):
+    sleep = Mock()
+    monkeypatch.setattr(backend.time, "sleep", sleep)
+    response = Response()
+    response.status_code = 403
+    denied = HTTPError(response=response)
+    operation = Mock(side_effect=[denied, denied, "recovered"])
+    probe = Mock(side_effect=[denied, denied, "reachable"])
+
+    assert backend._recovering_read(operation, probe) == "recovered"
+    assert operation.call_count == probe.call_count == 3
+    assert sleep.call_args_list == [call(12), call(45), call(120)]
+
+
+def test_explicit_proxy_denial_does_not_retry_or_probe(monkeypatch):
+    sleep = Mock()
+    monkeypatch.setattr(backend.time, "sleep", sleep)
+    response = Response()
+    response.status_code = 403
+    response.headers["X-Mitmproxy-Blocked-Reason"] = "policy"
+    operation = Mock(side_effect=HTTPError(response=response))
+    probe = Mock()
+
+    with pytest.raises(HTTPError):
+        backend._recovering_read(operation, probe)
+    operation.assert_called_once()
+    probe.assert_not_called()
+    sleep.assert_not_called()
+
+
 def test_rate_limit_respects_retry_after(monkeypatch):
     sleep = Mock()
     monkeypatch.setattr(backend.time, "sleep", sleep)

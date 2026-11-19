@@ -54,6 +54,11 @@ def _http_status(error):
     return status
 
 
+def _proxy_denied_access(error):
+    headers = getattr(getattr(error, "response", None), "headers", {})
+    return "X-Mitmproxy-Blocked-Reason" in headers
+
+
 def _retry(operation, attempts=4, *, read_only=False):
     """Retry transient failures, but fail authentication and invalid requests promptly."""
     for attempt in range(attempts):
@@ -68,7 +73,10 @@ def _retry(operation, attempts=4, *, read_only=False):
             )
             # A browse/search request can occasionally return a single 403 and
             # succeed moments later. Recheck once without repeating any write.
-            recheck_read = read_only and status == 403 and attempt == 0
+            recheck_read = (
+                read_only and status == 403 and attempt == 0
+                and not _proxy_denied_access(error)
+            )
             if not (transient or recheck_read) or attempt == attempts - 1:
                 raise
             delay = 12 if recheck_read else min(2**attempt * 2, 30)
@@ -79,6 +87,36 @@ def _retry(operation, attempts=4, *, read_only=False):
                 pass
             print(f"Transient API failure; retrying in {delay} seconds: {error}")
             time.sleep(delay)
+
+
+def _recovering_read(operation, probe, *, isolated_error=None):
+    """Pause an interrupted read until a separate access check succeeds."""
+    try:
+        return _retry(operation, read_only=True)
+    except Exception as original:
+        if _http_status(original) != 403 or _proxy_denied_access(original):
+            raise
+        for delay in (0, 45, 120, 300):
+            if delay:
+                print(f"Read access unavailable (HTTP 403). Checking again in {delay} seconds.")
+                time.sleep(delay)
+            try:
+                probe()
+            except Exception as error:
+                if _http_status(error) != 403 or _proxy_denied_access(error):
+                    raise
+                continue
+            if delay:
+                print("Read access recovered. Resuming the interrupted operation.")
+                return _retry(operation, read_only=True)
+            if isolated_error:
+                raise ValueError(isolated_error) from original
+            break
+        raise
+
+
+def _account_read(yt, operation):
+    return _recovering_read(operation, lambda: yt.get_library_playlists(limit=1))
 
 
 def _check_http_response(response, *args, **kwargs):
@@ -257,7 +295,7 @@ def get_playlist_id_by_name(
     #  https://github.com/sigma67/ytmusicapi/issues/539
     try:
         if playlists is None:
-            playlists = _retry(lambda: yt.get_library_playlists(limit=None), read_only=True)
+            playlists = _account_read(yt, lambda: yt.get_library_playlists(limit=None))
     except KeyError as e:
         print("=" * 60)
         print(f"Attempting to look up playlist '{title}' failed with KeyError: {e}")
@@ -370,7 +408,7 @@ def copier(
     existing = set()
     destination_tracks = []
     if dst_pl_id is not None:
-        playlist = _retry(lambda: yt.get_playlist(playlistId=dst_pl_id, limit=None), read_only=True)
+        playlist = _account_read(yt, lambda: yt.get_playlist(playlistId=dst_pl_id, limit=None))
         destination_tracks = playlist["tracks"]
         existing = {
             t["videoId"]
@@ -381,7 +419,7 @@ def copier(
             f"== Youtube Playlist: {playlist['title']} ({len(existing)} unique tracks)"
         )
     elif not playlist_mode and (not dry_run or audit_existing):
-        playlist = _retry(lambda: yt.get_liked_songs(limit=None), read_only=True)
+        playlist = _account_read(yt, lambda: yt.get_liked_songs(limit=None))
         destination_tracks = playlist["tracks"]
         existing = {
             t["videoId"] for t in destination_tracks
@@ -447,7 +485,6 @@ def copier(
             }
             details = ResearchDetails()
             used_api = False
-            searching_catalog = False
             print(
                 f"Spotify: {src_track.title} - {src_track.artist} - {src_track.album}"
             )
@@ -485,7 +522,7 @@ def copier(
                 if dst_track is None and source_key in overrides:
                     video_id = overrides[source_key]
                     used_api = True
-                    song = _retry(lambda: yt.get_song(video_id), read_only=True)
+                    song = _account_read(yt, lambda: yt.get_song(video_id))
                     if song.get("playabilityStatus", {}).get("status") != "OK":
                         raise ValueError(f"Override {video_id} is not playable")
                     dst_track = {"videoId": video_id, **song["videoDetails"]}
@@ -501,8 +538,7 @@ def copier(
                         dst_track = cached
                 if dst_track is None:
                     used_api = True
-                    searching_catalog = True
-                    dst_track = _retry(
+                    dst_track = _recovering_read(
                         lambda: lookup_song(
                             catalog,
                             src_track.title,
@@ -518,9 +554,12 @@ def copier(
                             isrc=src_track.isrc,
                             prefer_explicit=prefer_explicit,
                         ),
-                        read_only=True,
+                        lambda: catalog.search("music", filter="songs", limit=1),
+                        isolated_error=(
+                            "Catalog search was denied for this track; track needs review"
+                            if catalog is not yt else None
+                        ),
                     )
-                    searching_catalog = False
                     match_cache[cache_key] = dst_track
                 row["queries"] = details.queries
                 video_id = dst_track["videoId"]
@@ -560,9 +599,9 @@ def copier(
                         nonlocal attempted
                         # Duplicate writes are not idempotent after a lost response.
                         if attempted and dst_pl_id is not None:
-                            current = _retry(
+                            current = _account_read(
+                                yt,
                                 lambda: yt.get_playlist(playlistId=dst_pl_id, limit=None),
-                                read_only=True,
                             )
                             count = sum(
                                 t.get("videoId") == video_id
@@ -610,16 +649,6 @@ def copier(
                 summary[row["status"]] += 1
             except Exception as error:
                 status = _http_status(error)
-                if searching_catalog and catalog is not yt and status == 403:
-                    try:
-                        # A single public query can fail while catalog search is available.
-                        catalog.search("music", filter="songs", limit=1)
-                    except Exception:
-                        pass  # Preserve the original access failure and stop.
-                    else:
-                        details.errors.append("Track query returned HTTP 403 while public search was reachable")
-                        error = ValueError("Catalog search was denied for this track; track needs review")
-                        status = None
                 row.update(
                     status="failed",
                     error=str(error),
@@ -669,12 +698,12 @@ def copier(
         if not dry_run and (expected or dst_pl_id is not None):
             try:
                 if dst_pl_id is not None:
-                    destination = _retry(
+                    destination = _account_read(
+                        yt,
                         lambda: yt.get_playlist(playlistId=dst_pl_id, limit=None),
-                        read_only=True,
                     )
                 else:
-                    destination = _retry(lambda: yt.get_liked_songs(limit=None), read_only=True)
+                    destination = _account_read(yt, lambda: yt.get_liked_songs(limit=None))
                 present = Counter(
                     t["videoId"]
                     for t in destination["tracks"]
@@ -827,7 +856,7 @@ def copy_all_playlists(
     """Copy playlists with shared search caches and per-playlist reconciliation."""
     spotify_pls = load_playlists_json(spotify_playlist_file, spotify_playlists_encoding)
     yt = get_ytmusic()
-    destination_playlists = _retry(lambda: yt.get_library_playlists(limit=None), read_only=True)
+    destination_playlists = _account_read(yt, lambda: yt.get_library_playlists(limit=None))
     match_cache = _load_match_cache(report_file)
     album_cache = {}
     results = {}
